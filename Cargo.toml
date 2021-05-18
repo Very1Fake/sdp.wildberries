@@ -1,0 +1,9 @@
+[workspace]
+members = [
+    "api",
+    "app"
+]
+
+[profile.release]
+lto = "thin"
+codegen-units = 4
