@@ -1,6 +1,6 @@
 [package]
 name = "app"
-version = "0.0.2"
+version = "0.0.3"
 authors = ["very1fake <very1fake.coder@gmail.com>"]
 edition = "2018"
 
@@ -8,4 +8,5 @@ edition = "2018"
 
 [dependencies]
 iced = { version = "0.3", default-features = false, features = ["debug", "tokio", "glow"] }
+iced_native = "0.4"
 tokio = { version = "1.6", features = ["time"] }

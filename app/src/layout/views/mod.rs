@@ -14,6 +14,12 @@ pub enum View {
     Main(MainViewState),
 }
 
+impl Default for View {
+    fn default() -> Self {
+        View::Splash
+    }
+}
+
 #[derive(Clone, Debug)]
 pub enum ViewMessage {
     Splash(SplashMessage),

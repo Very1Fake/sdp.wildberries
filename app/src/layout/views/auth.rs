@@ -3,6 +3,7 @@ use iced::{
 };
 
 use super::{Message, View, ViewMessage};
+use crate::layout::views::main::MainViewState;
 use crate::layout::{themes::Theme, Layout};
 
 #[derive(Clone, Debug)]
@@ -50,7 +51,12 @@ pub fn update(layout: &mut Layout, msg: AuthMessage) -> Command<Message> {
 
     if let View::Auth(ref mut state) = layout.view {
         match msg {
-            AuthMessage::Success => layout.view = View::Main(Default::default()),
+            AuthMessage::Success => {
+                layout.view = View::Main(MainViewState {
+                    tabs: vec![(Default::default(), "i", "Module 1".to_string())],
+                    ..Default::default()
+                })
+            }
             AuthMessage::Failed => state.stage = Stage::Failed(1),
             AuthMessage::KeyInput(val) => {
                 if val.len() <= 19 {
@@ -78,7 +84,7 @@ pub fn update(layout: &mut Layout, msg: AuthMessage) -> Command<Message> {
                     if count == 4 {
                         result = Command::perform(
                             async move {
-                                sleep(Duration::from_millis(1500)).await;
+                                sleep(Duration::from_millis(750)).await;
                                 if key == "1234-1234-7777-9900" {
                                     ViewMessage::Auth(AuthMessage::Success)
                                 } else {

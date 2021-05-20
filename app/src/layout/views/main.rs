@@ -1,30 +1,45 @@
-use iced::{scrollable, Container, Element, Length, Row, Text};
+use iced::{button, scrollable, Column, Container, Element, Length, Row, Rule, Text};
 
-use super::{Message, View};
-use crate::layout::{themes::Theme, Layout};
+use super::{Message, View, ViewMessage};
+use crate::layout::{icons::icon, themes::Theme, Layout};
 
 #[derive(Clone, Debug)]
 pub enum MainMessage {
     TabChange(Tab),
 }
 
-#[derive(Default)]
-pub struct MainViewState {
-    tab: Tab,
-    tab_scroll: scrollable::State,
-    section_scroll: scrollable::State,
+impl Into<Message> for MainMessage {
+    fn into(self) -> Message {
+        Message::View(ViewMessage::Main(self))
+    }
 }
 
+#[derive(Default)]
+pub struct MainViewState {
+    pub tab: Tab,
+
+    pub tab_scroll: scrollable::State,
+    pub content_scroll: scrollable::State,
+
+    pub home_button: button::State,
+    pub settings_button: button::State,
+    pub tabs: Vec<(button::State, &'static str, String)>,
+}
+
+////////////////////////////////////////////////////////////////////////////////////////////////////
+// Tabs
+////////////////////////////////////////////////////////////////////////////////////////////////////
+
 #[derive(Clone, Debug)]
-enum Tab {
-    Welcome,
+pub enum Tab {
+    Home,
     Settings,
-    Info,
+    Module(String),
 }
 
 impl Default for Tab {
     fn default() -> Self {
-        Tab::Welcome
+        Tab::Home
     }
 }
 
@@ -43,16 +58,64 @@ pub fn update(layout: &mut Layout, msg: MainMessage) {
 }
 
 pub fn view<'a>(state: &'a mut MainViewState, theme: &Theme) -> Element<'a, Message> {
+    let mut tabs = scrollable::Scrollable::new(&mut state.tab_scroll)
+        .push(
+            button::Button::new(
+                &mut state.home_button,
+                icon("h").size(32).width(Length::Units(32)),
+            )
+            .on_press(MainMessage::TabChange(Tab::Home).into())
+            .padding(16)
+            .style(theme.icon_button()),
+        )
+        .height(Length::Fill);
+
+    for (s, i, n) in &mut state.tabs {
+        tabs = tabs.push(
+            button::Button::new(s, icon(i).size(32).width(Length::Units(32)))
+                .on_press(MainMessage::TabChange(Tab::Module(n.clone())).into())
+                .padding(16)
+                .style(theme.icon_button()),
+        );
+    }
+
     Container::new(
         Row::new()
             .push(
-                scrollable::Scrollable::new(&mut state.tab_scroll)
-                    .push(Text::new("Tab scroll here")),
+                Column::new()
+                    .push(tabs)
+                    .push(
+                        button::Button::new(
+                            &mut state.settings_button,
+                            icon("s").size(32).width(Length::Units(32)),
+                        )
+                        .on_press(MainMessage::TabChange(Tab::Settings).into())
+                        .padding(16)
+                        .style(theme.icon_button()),
+                    )
+                    .height(Length::Fill)
+                    .width(Length::Units(74)),
             )
             .push(
                 Container::new(
-                    scrollable::Scrollable::new(&mut state.section_scroll)
-                        .push(Text::new("Section scroll here")),
+                    scrollable::Scrollable::new(&mut state.content_scroll).push(
+                        Container::new(match state.tab {
+                            Tab::Home => Column::new().push(
+                                section("Welcome", theme)
+                                    .push(Text::new("Some staff will be here soon...")),
+                            ),
+                            Tab::Settings => Column::new().push(
+                                section("Settings", theme)
+                                    .push(Text::new("Some settings options will be here soon")),
+                            ),
+                            Tab::Module(ref name) => Column::new().push(
+                                section(&format!("Module \"{}\"", name), theme)
+                                    .push(Text::new("And again, soon...")),
+                            ),
+                        })
+                        .max_width(900)
+                        .center_x(),
+                    ),
                 )
                 .height(Length::Fill)
                 .width(Length::Fill)
@@ -62,4 +125,13 @@ pub fn view<'a>(state: &'a mut MainViewState, theme: &Theme) -> Element<'a, Mess
     .height(Length::Fill)
     .width(Length::Fill)
     .into()
+}
+
+#[inline]
+fn section<'a>(name: &str, theme: &Theme) -> Column<'a, Message> {
+    Column::new()
+        .push(Text::new(name).size(32))
+        .push(Rule::horizontal(theme.section_divider_spacing()).style(theme.section_divider()))
+        .padding(16)
+        .spacing(16)
 }

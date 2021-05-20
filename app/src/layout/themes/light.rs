@@ -1,7 +1,4 @@
-use iced::{
-    widget::{button, text_input},
-    Background, Color, Vector,
-};
+use iced::{button, rule, text_input, Background, Color, Vector};
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 // Colors
@@ -10,7 +7,7 @@ use iced::{
 // Text colors
 
 const COLOR_TEXT: Color = Color::WHITE;
-const COLOR_TEXT_VALUE: Color = Color::from_rgba(
+const COLOR_TEXT_LIGHT: Color = Color::from_rgba(
     0x66 as f32 / 256.0,
     0x66 as f32 / 256.0,
     0x66 as f32 / 256.0,
@@ -25,6 +22,7 @@ pub const COLOR_TEXT_MUTED: Color = Color::from_rgba(
 
 // General colors
 
+pub const OPPOSITE: Color = Color::BLACK;
 pub const COLOR_PRIMARY: Color = Color::from_rgba(
     0x1E as f32 / 256.0,
     0x87 as f32 / 256.0,
@@ -49,6 +47,25 @@ pub const COLOR_DANGER: Color = Color::from_rgba(
     0x6E as f32 / 256.0,
     1.0,
 );
+const COLOR_GREY_INACTIVE: Color = Color::from_rgba(
+    0xBD as f32 / 256.0,
+    0xBD as f32 / 256.0,
+    0xBD as f32 / 256.0,
+    1.0,
+);
+const COLOR_GREY_ACTIVE: Color = Color::from_rgba(
+    0x9E as f32 / 256.0,
+    0x9E as f32 / 256.0,
+    0x9E as f32 / 256.0,
+    1.0,
+);
+const COLOR_BACKGROUND_GREY_INACTIVE: Color = Color::WHITE;
+const COLOR_BACKGROUND_GREY_ACTIVE: Color = Color::from_rgba(
+    0xE0 as f32 / 256.0,
+    0xE0 as f32 / 256.0,
+    0xE0 as f32 / 256.0,
+    1.0,
+);
 
 // Other colors
 
@@ -66,12 +83,18 @@ const COLOR_SELECTION: Color = Color::from_rgba(
 );
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
+// Misc
+////////////////////////////////////////////////////////////////////////////////////////////////////
+
+pub const SECTION_DIVIDER_SPACING: u16 = 7;
+
+////////////////////////////////////////////////////////////////////////////////////////////////////
 // Button Primary
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
-pub struct ButtonPrimary;
+pub struct Button;
 
-impl button::StyleSheet for ButtonPrimary {
+impl button::StyleSheet for Button {
     fn active(&self) -> button::Style {
         button::Style {
             background: Some(Background::Color(COLOR_PRIMARY)),
@@ -109,6 +132,36 @@ impl button::StyleSheet for ButtonPrimary {
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
+// Icon button
+////////////////////////////////////////////////////////////////////////////////////////////////////
+
+pub struct IconButton;
+
+impl button::StyleSheet for IconButton {
+    fn active(&self) -> button::Style {
+        button::Style {
+            background: Some(Background::Color(COLOR_BACKGROUND_GREY_INACTIVE)),
+            text_color: COLOR_GREY_INACTIVE,
+            ..Default::default()
+        }
+    }
+
+    fn hovered(&self) -> button::Style {
+        button::Style {
+            text_color: COLOR_GREY_ACTIVE,
+            ..self.active()
+        }
+    }
+
+    fn pressed(&self) -> button::Style {
+        button::Style {
+            background: Some(Background::Color(COLOR_BACKGROUND_GREY_ACTIVE)),
+            ..self.hovered()
+        }
+    }
+}
+
+////////////////////////////////////////////////////////////////////////////////////////////////////
 // Text Input
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
@@ -135,10 +188,27 @@ impl text_input::StyleSheet for TextInput {
     }
 
     fn value_color(&self) -> Color {
-        COLOR_TEXT_VALUE
+        COLOR_TEXT_LIGHT
     }
 
     fn selection_color(&self) -> Color {
         COLOR_SELECTION
+    }
+}
+
+////////////////////////////////////////////////////////////////////////////////////////////////////
+// Section divider
+////////////////////////////////////////////////////////////////////////////////////////////////////
+
+pub struct SectionDivider;
+
+impl rule::StyleSheet for SectionDivider {
+    fn style(&self) -> rule::Style {
+        rule::Style {
+            color: Color::BLACK,
+            width: 1,
+            radius: 0.0,
+            fill_mode: rule::FillMode::AsymmetricPadding(0, 16),
+        }
     }
 }
