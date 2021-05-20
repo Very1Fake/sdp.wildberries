@@ -5,7 +5,10 @@ use layout::Layout;
 mod layout;
 
 fn main() -> Result {
+    #[cfg(debug_assertions)]
     let icon = include_bytes!("../assets/images/logo.rev").to_vec();
+    #[cfg(not(debug_assertions))]
+    let icon = include_bytes!("../assets/images/logo.raw").to_vec();
 
     Layout::run(Settings {
         window: window::Settings {

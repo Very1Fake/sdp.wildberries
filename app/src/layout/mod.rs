@@ -1,12 +1,17 @@
 use iced::{executor, Application, Clipboard, Command, Element};
 
-use views::{auth, splash, View, ViewMessage};
+use themes::Theme;
+use views::{auth, main, splash, View, ViewMessage};
 
+mod icons;
+mod themes;
 mod views;
 
 #[derive(Clone, Debug)]
 pub enum Message {
     View(views::ViewMessage),
+    Log(String),
+    None,
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -15,6 +20,7 @@ pub enum Message {
 
 pub struct Layout {
     view: View,
+    theme: Theme,
 }
 
 impl Application for Layout {
@@ -27,10 +33,13 @@ impl Application for Layout {
         use tokio::time::sleep;
 
         (
-            Layout { view: View::Splash },
+            Layout {
+                view: View::Splash,
+                theme: Theme::Light,
+            },
             Command::perform(
                 async {
-                    sleep(Duration::from_millis(500)).await;
+                    sleep(Duration::from_millis(1500)).await;
                     ViewMessage::Splash(splash::SplashMessage::Done)
                 },
                 Message::View,
@@ -39,7 +48,7 @@ impl Application for Layout {
     }
 
     fn title(&self) -> String {
-        String::from("Sellars Desktop Platform")
+        String::from("SDP")
     }
 
     fn update(
@@ -47,20 +56,26 @@ impl Application for Layout {
         message: Self::Message,
         _clipboard: &mut Clipboard,
     ) -> Command<Self::Message> {
+        let mut result = Command::none();
+
         match message {
             Message::View(view) => match view {
                 ViewMessage::Splash(msg) => splash::update(self, msg),
-                ViewMessage::Auth(msg) => auth::update(self, msg),
+                ViewMessage::Auth(msg) => result = auth::update(self, msg),
+                ViewMessage::Main(msg) => main::update(self, msg),
             },
+            Message::Log(msg) => println!("L: {}", msg),
+            _ => (),
         }
 
-        Command::none()
+        result
     }
 
     fn view(&mut self) -> Element<Self::Message> {
         match &mut self.view {
-            View::Splash => splash::view(),
-            View::Auth(state) => auth::view(state),
+            View::Splash => splash::view(&self.theme),
+            View::Auth(state) => auth::view(state, &self.theme),
+            View::Main(state) => main::view(state, &self.theme),
         }
     }
 }

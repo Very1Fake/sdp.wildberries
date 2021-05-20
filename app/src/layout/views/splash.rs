@@ -1,10 +1,7 @@
-use iced::{
-    widget::{text_input, Container, Text},
-    Element, Length,
-};
+use iced::{Align, Column, Container, Element, Length, Text};
 
-use super::{auth::AuthViewState, Message, View};
-use crate::layout::Layout;
+use super::{Message, View};
+use crate::layout::{icons::icon, themes::Theme, Layout};
 
 #[derive(Clone, Debug)]
 pub enum SplashMessage {
@@ -17,20 +14,26 @@ pub enum SplashMessage {
 
 pub fn update(layout: &mut Layout, msg: SplashMessage) {
     match msg {
-        SplashMessage::Done => {
-            layout.view = View::Auth(AuthViewState {
-                key_state: text_input::State::new(),
-                key: String::new(),
-            })
-        }
+        SplashMessage::Done => layout.view = View::Auth(Default::default()),
     }
 }
 
-pub fn view<'a>() -> Element<'a, Message> {
-    Container::new(Text::new("Sellars Desktop Platform").size(42))
-        .height(Length::Fill)
-        .width(Length::Fill)
-        .center_x()
-        .center_y()
-        .into()
+pub fn view<'a>(theme: &Theme) -> Element<'a, Message> {
+    Container::new(
+        Column::new()
+            .push(
+                icon("b")
+                    .size(128)
+                    .width(Length::Shrink)
+                    .color(theme.color_primary()),
+            )
+            .push(Text::new("SDP").size(64))
+            .spacing(8)
+            .align_items(Align::Center),
+    )
+    .height(Length::Fill)
+    .width(Length::Fill)
+    .center_x()
+    .center_y()
+    .into()
 }
