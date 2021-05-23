@@ -2,7 +2,12 @@ use iced::{window, Application, Result, Settings};
 
 use layout::Layout;
 
+mod icons;
 mod layout;
+mod themes;
+mod views;
+
+static VERSION: &'static str = env!("CARGO_PKG_VERSION");
 
 fn main() -> Result {
     #[cfg(debug_assertions)]

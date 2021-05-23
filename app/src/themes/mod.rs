@@ -1,3 +1,5 @@
+use std::fmt;
+
 use iced::{
     rule,
     widget::{button, text_input},
@@ -6,12 +8,13 @@ use iced::{
 
 mod light;
 
+#[derive(PartialEq, Eq, Clone, Copy, Debug)]
 pub enum Theme {
     Light,
 }
 
 impl Theme {
-    // pub const ALL: [Theme; 1] = [Theme::Light];
+    pub const ALL: [Theme; 1] = [Theme::Light];
 
     ////////////////////////////////////////////////////////////////////////////////////////////////
     // Colors
@@ -87,5 +90,17 @@ impl Theme {
 impl Default for Theme {
     fn default() -> Self {
         Theme::Light
+    }
+}
+
+impl std::fmt::Display for Theme {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "{}",
+            match self {
+                Theme::Light => "Light",
+            }
+        )
     }
 }

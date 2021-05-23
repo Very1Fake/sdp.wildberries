@@ -4,6 +4,9 @@ members = [
     "app"
 ]
 
+[profile.dev]
+debug = false
+
 [profile.release]
 lto = "thin"
 codegen-units = 4

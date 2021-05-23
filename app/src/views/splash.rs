@@ -1,22 +1,10 @@
 use iced::{Align, Column, Container, Element, Length, Text};
 
-use super::{Message, View};
-use crate::layout::{icons::icon, themes::Theme, Layout};
-
-#[derive(Clone, Debug)]
-pub enum SplashMessage {
-    Done,
-}
+use crate::{icons::icon, layout::Message, themes::Theme};
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 // View rendering & processing
 ////////////////////////////////////////////////////////////////////////////////////////////////////
-
-pub fn update(layout: &mut Layout, msg: SplashMessage) {
-    match msg {
-        SplashMessage::Done => layout.view = View::Auth(Default::default()),
-    }
-}
 
 pub fn view<'a>(theme: &Theme) -> Element<'a, Message> {
     Container::new(

@@ -208,7 +208,7 @@ impl rule::StyleSheet for SectionDivider {
             color: Color::BLACK,
             width: 1,
             radius: 0.0,
-            fill_mode: rule::FillMode::AsymmetricPadding(0, 16),
+            fill_mode: rule::FillMode::Full,
         }
     }
 }
