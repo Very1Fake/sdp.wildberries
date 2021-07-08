@@ -1,12 +1,12 @@
 [workspace]
 members = [
     "api",
-    "app"
+    "app",
 ]
 
 [profile.dev]
 debug = false
 
 [profile.release]
-lto = "thin"
-codegen-units = 4
+lto = "fat"
+codegen-units = 1

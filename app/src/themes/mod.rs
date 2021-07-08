@@ -1,14 +1,14 @@
 use std::fmt;
 
 use iced::{
-    rule,
+    container, rule,
     widget::{button, text_input},
     Color,
 };
 
 mod light;
 
-#[derive(PartialEq, Eq, Clone, Copy, Debug)]
+#[derive(PartialEq, Eq, Clone, Debug)]
 pub enum Theme {
     Light,
 }
@@ -52,9 +52,21 @@ impl Theme {
     // Widgets styling
     ////////////////////////////////////////////////////////////////////////////////////////////////
 
-    pub fn button(&self) -> Box<dyn button::StyleSheet> {
+    pub fn primary_btn(&self) -> Box<dyn button::StyleSheet> {
         match *self {
-            Theme::Light => light::Button.into(),
+            Theme::Light => light::PrimaryButton.into(),
+        }
+    }
+
+    pub fn danger_btn(&self) -> Box<dyn button::StyleSheet> {
+        match *self {
+            Theme::Light => light::DangerButton.into(),
+        }
+    }
+
+    pub fn success_btn(&self) -> Box<dyn button::StyleSheet> {
+        match *self {
+            Theme::Light => light::SuccessButton.into(),
         }
     }
 
@@ -70,9 +82,21 @@ impl Theme {
         }
     }
 
+    pub fn text_input_danger(&self) -> Box<dyn text_input::StyleSheet> {
+        match *self {
+            Theme::Light => light::TextInputDanger.into(),
+        }
+    }
+
     pub fn section_divider(&self) -> Box<dyn rule::StyleSheet> {
         match *self {
             Theme::Light => light::SectionDivider.into(),
+        }
+    }
+
+    pub fn card(&self) -> Box<dyn container::StyleSheet> {
+        match *self {
+            Theme::Light => light::Card.into(),
         }
     }
 

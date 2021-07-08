@@ -17,3 +17,9 @@ Cargo.lock
 
 # Local History for VS Code
 .history/
+
+### Project
+accounts.json
+proxy.json
+settings.json
+license.jwt

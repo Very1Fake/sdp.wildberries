@@ -1,23 +1,103 @@
+use std::{
+    collections::BTreeMap,
+    fs::{remove_file, write, File},
+    path::Path,
+    time::Duration,
+};
+
 use iced::{button, executor, Application, Clipboard, Command, Element, Subscription, Text};
 use iced_native::{
     event::Event,
     keyboard::{Event as KeyEvent, KeyCode},
+    window::Event as WinEvent,
 };
+use serde::{Deserialize, Serialize};
+use serde_json::{from_reader, to_writer};
+use tokio::time::sleep;
 
 use crate::{
+    logic::{
+        activation::{Activation, ActivationError},
+        task::{Delivery, Task, TaskMsg, TaskProgress},
+    },
     themes::Theme,
-    views::{splash, tabs::Tab, View, ViewMsg, ViewState},
+    views::{
+        auth::{AuthViewState, Stage},
+        splash,
+        tabs::{
+            accounts::{Account, AccountMsg, AccountState},
+            proxy::{Proxy, ProxyMode, ProxyMsg, ProxyState},
+            Tab, TabMsg,
+        },
+        View, ViewMsg, ViewState,
+    },
+    ACCOUNTS_FILE, LICENSE_FILE, PROXY_FILE, SETTINGS_FILE,
 };
+
+////////////////////////////////////////////////////////////////////////////////////////////////////
+// Settings
+////////////////////////////////////////////////////////////////////////////////////////////////////
+
+#[derive(Deserialize, Serialize, PartialEq)]
+#[serde(default)]
+struct Settings {
+    webhook: (u128, String),
+    proxy_mode: ProxyMode,
+    scale: f64,
+}
+
+impl Default for Settings {
+    fn default() -> Self {
+        Settings {
+            webhook: (0, String::new()),
+            proxy_mode: ProxyMode::default(),
+            scale: 1.0,
+        }
+    }
+}
+
+////////////////////////////////////////////////////////////////////////////////////////////////////
+// Message
+////////////////////////////////////////////////////////////////////////////////////////////////////
 
 #[derive(Clone, Debug)]
 pub enum Message {
     View(View),
     ViewMsg(ViewMsg),
+    Tab(usize),
+    TabMsg(TabMsg),
+
+    Account(usize, AccountMsg),
+    NewAccount,
+    Proxy(usize, ProxyMsg),
+    NewProxy,
+    Task(u64, TaskMsg),
+    AddTasks {
+        pid: String,
+        size_name: String,
+        so: String,
+        sv: String,
+        option: String,
+        delivery: Delivery,
+    },
+    TaskProgressed((u64, TaskProgress)),
+
+    ActivationComplete {
+        activation: Activation,
+        token: String,
+    },
+    ActivationFailed {
+        err: ActivationError,
+        key: String,
+    },
+    Logout,
+
     Event(Event),
     Theme(Theme),
     Scale(f64),
+    ProxyMode(ProxyMode),
     ResetAppearance,
-    Tab(usize),
+
     None,
 }
 
@@ -29,6 +109,19 @@ pub enum Message {
 pub struct Layout {
     explain: bool,
     scale: f64,
+    exit: bool,
+    proxy_mode: ProxyMode,
+
+    accounts: Vec<Account>,
+    proxies: Vec<Proxy>,
+    w_id: u128,
+    w_token: String,
+
+    task_counter: u64,
+    tasks: BTreeMap<u64, Task>,
+
+    token: String,
+    activation: Option<Activation>,
 
     view: View,
     state: ViewState,
@@ -38,18 +131,101 @@ pub struct Layout {
     tabs: Vec<(String, Tab, button::State)>,
 }
 
+impl Layout {
+    fn graceful_exit(&mut self) {
+        {
+            let content = self
+                .accounts
+                .iter()
+                .filter(|account| {
+                    if let AccountState::View { .. } = account.state {
+                        true
+                    } else {
+                        false
+                    }
+                })
+                .collect::<Vec<&Account>>();
+            let mut old: Vec<Account> = Vec::new();
+            load_file(ACCOUNTS_FILE, &mut old);
+
+            if content != Vec::<&Account>::new() && content != old.iter().collect::<Vec<&Account>>()
+            {
+                to_writer(File::create(Path::new(ACCOUNTS_FILE)).unwrap(), &content).unwrap();
+            }
+        }
+        {
+            let content = self
+                .proxies
+                .iter()
+                .filter(|proxy| {
+                    if let ProxyState::View { .. } = proxy.state {
+                        true
+                    } else {
+                        false
+                    }
+                })
+                .collect::<Vec<&Proxy>>();
+            let mut old: Vec<Proxy> = Vec::new();
+            load_file(PROXY_FILE, &mut old);
+
+            if content != Vec::<&Proxy>::new() && content != old.iter().collect::<Vec<&Proxy>>() {
+                to_writer(File::create(Path::new(PROXY_FILE)).unwrap(), &content).unwrap();
+            }
+        }
+
+        {
+            let content = Settings {
+                webhook: (self.w_id, self.w_token.clone()),
+                proxy_mode: self.proxy_mode.clone(),
+                scale: self.scale,
+            };
+            let mut old = Settings::default();
+            load_file(SETTINGS_FILE, &mut old);
+
+            if content != Settings::default() && content != old {
+                to_writer(File::create(Path::new(SETTINGS_FILE)).unwrap(), &content).unwrap();
+            }
+        }
+
+        if !self.token.is_empty() {
+            write(Path::new(LICENSE_FILE), &self.token).unwrap();
+        }
+
+        self.exit = true
+    }
+}
+
 impl Application for Layout {
     type Executor = executor::Default;
     type Message = Message;
     type Flags = ();
 
     fn new(_flags: Self::Flags) -> (Self, Command<Self::Message>) {
-        use std::time::Duration;
-        use tokio::time::sleep;
+        let mut accounts = Vec::new();
+        let mut proxies = Vec::new();
+        let mut settings = Settings::default();
+
+        load_file(ACCOUNTS_FILE, &mut accounts);
+        load_file(PROXY_FILE, &mut proxies);
+        load_file(SETTINGS_FILE, &mut settings);
+
+        let Settings {
+            webhook: (w_id, w_token),
+            proxy_mode,
+            scale,
+        } = settings;
+
+        let token = Activation::load_token(LICENSE_FILE);
 
         (
             Layout {
-                scale: 1.0,
+                scale,
+                proxy_mode,
+                accounts,
+                proxies,
+                w_id,
+                w_token,
+                token: token.clone(),
                 tab: 1,
                 tabs: vec![
                     (
@@ -58,15 +234,48 @@ impl Application for Layout {
                         Default::default(),
                     ),
                     (String::from("Home"), Tab::default(), Default::default()),
+                    (
+                        String::from("Tasks"),
+                        Tab::Tasks(Default::default()),
+                        Default::default(),
+                    ),
+                    (
+                        String::from("Create Tasks"),
+                        Tab::AddTasks(Default::default()),
+                        Default::default(),
+                    ),
+                    (
+                        String::from("DataStore"),
+                        Tab::Accounts(Default::default()),
+                        Default::default(),
+                    ),
+                    (
+                        String::from("Proxy"),
+                        Tab::Proxy(Default::default()),
+                        Default::default(),
+                    ),
                 ],
                 ..Default::default()
             },
             Command::perform(
-                async {
-                    sleep(Duration::from_millis(1500)).await;
-                    View::Auth
+                async move {
+                    match Activation::from_token(&token) {
+                        Some(saved) => {
+                            let key = saved.key.clone();
+                            match saved.verify().await {
+                                Ok((activation, token)) => {
+                                    Message::ActivationComplete { activation, token }
+                                }
+                                Err(err) => Message::ActivationFailed { err, key },
+                            }
+                        }
+                        None => {
+                            sleep(Duration::from_secs(1)).await;
+                            Message::View(View::Auth)
+                        }
+                    }
                 },
-                Message::View,
+                |msg| msg,
             ),
         )
     }
@@ -94,6 +303,182 @@ impl Application for Layout {
                     }
                 }
             },
+            Message::Tab(tab) => self.tab = tab,
+            Message::TabMsg(tab) => match tab {
+                TabMsg::SettingsMsg(msg) => {
+                    if let Tab::Settings(ref mut state) = self.tabs[0].1 {
+                        state.update(msg, &mut self.w_id, &mut self.w_token)
+                    }
+                }
+                TabMsg::AddTasksMsg(msg) => {
+                    if let Tab::AddTasks(ref mut state) = self.tabs[3].1 {
+                        result = state.update(msg)
+                    }
+                }
+            },
+            Message::Account(id, AccountMsg::Delete) => {
+                self.accounts.remove(id);
+            }
+            Message::Account(id, msg) => self.accounts[id].update(msg),
+            Message::NewAccount => self.accounts.push(Account::new()),
+            Message::Proxy(id, ProxyMsg::Delete) => {
+                self.proxies.remove(id);
+            }
+            Message::Proxy(id, msg) => self.proxies[id].update(msg),
+            Message::NewProxy => self.proxies.push(Proxy::new()),
+            Message::Task(id, TaskMsg::Delete) => {
+                self.tasks.remove(&id);
+            }
+            Message::Task(id, msg) => self.tasks.get_mut(&id).unwrap().update(msg),
+            Message::AddTasks {
+                pid,
+                size_name,
+                so,
+                sv,
+                option,
+                delivery,
+            } => {
+                let mut proxies = self
+                    .proxies
+                    .iter()
+                    .filter(|p| {
+                        if let ProxyState::View { .. } = p.state {
+                            p.active
+                        } else {
+                            false
+                        }
+                    })
+                    .map(|p| p.address.clone())
+                    .cycle()
+                    .enumerate();
+                let proxy_count = self
+                    .proxies
+                    .iter()
+                    .filter(|p| {
+                        if let ProxyState::View { .. } = p.state {
+                            p.active
+                        } else {
+                            false
+                        }
+                    })
+                    .count();
+                let account_count = self
+                    .accounts
+                    .iter()
+                    .filter(|a| {
+                        if let AccountState::View { .. } = a.state {
+                            a.active
+                        } else {
+                            false
+                        }
+                    })
+                    .count();
+
+                let iterator = self
+                    .accounts
+                    .iter()
+                    .filter(|a| {
+                        if let AccountState::View { .. } = a.state {
+                            a.active
+                        } else {
+                            false
+                        }
+                    })
+                    .rev()
+                    .skip(if let ProxyMode::Strict = self.proxy_mode {
+                        account_count - proxy_count
+                    } else {
+                        0
+                    });
+
+                for a in iterator {
+                    let p = if proxy_count == 0 {
+                        None
+                    } else {
+                        match &self.proxy_mode {
+                            ProxyMode::Off => None,
+                            ProxyMode::Repeat => Some(proxies.next().unwrap().1),
+                            ProxyMode::Moderate => {
+                                let (i, proxy) = proxies.next().unwrap();
+
+                                if i < proxy_count {
+                                    Some(proxy)
+                                } else {
+                                    None
+                                }
+                            }
+                            ProxyMode::Strict => Some(proxies.next().unwrap().1),
+                        }
+                    };
+
+                    self.task_counter += 1;
+
+                    match self.tasks.insert(
+                        self.task_counter,
+                        Task::new(
+                            self.task_counter,
+                            p,
+                            pid.clone(),
+                            size_name.clone(),
+                            so.clone(),
+                            sv.clone(),
+                            option.clone(),
+                            delivery.clone(),
+                            a.login.clone(),
+                            a.password.clone(),
+                            self.w_id,
+                            self.w_token.clone(),
+                        ),
+                    ) {
+                        Some(_) => panic!(),
+                        None => (),
+                    }
+                }
+
+                self.tab = 2;
+            }
+            Message::TaskProgressed((uid, state)) => match self.tasks.get_mut(&uid) {
+                Some(task) => task.progress = state,
+                None => (),
+            },
+            Message::ActivationComplete { activation, token } => {
+                self.activation = Some(activation);
+                self.token = token;
+
+                self.view = View::Main;
+                self.state = View::Main.state();
+            }
+            Message::ActivationFailed { err, key } => {
+                self.view = View::Auth;
+                self.state = ViewState::Auth(AuthViewState {
+                    key,
+                    stage: Stage::Failed(err),
+                    ..Default::default()
+                });
+            }
+            Message::Logout => {
+                self.token = String::new();
+                match self.activation.take() {
+                    Some(activation) => {
+                        result = Command::perform(
+                            async move {
+                                activation.deactivate().await;
+                                View::Auth
+                            },
+                            Message::View,
+                        )
+                    }
+                    None => {}
+                };
+
+                match remove_file(Path::new(LICENSE_FILE)) {
+                    Ok(_) => (),
+                    Err(_) => (),
+                }
+
+                self.view = View::Splash;
+                self.state = View::Splash.state();
+            }
             Message::Event(event) => match event {
                 Event::Keyboard(key_event) => match key_event {
                     KeyEvent::KeyReleased {
@@ -105,15 +490,19 @@ impl Application for Layout {
                     },
                     _ => (),
                 },
+                Event::Window(win_event) => match win_event {
+                    WinEvent::CloseRequested => self.graceful_exit(),
+                    _ => (),
+                },
                 _ => (),
             },
             Message::Theme(theme) => self.theme = theme,
             Message::Scale(scale) => self.scale = scale,
+            Message::ProxyMode(proxy_mode) => self.proxy_mode = proxy_mode,
             Message::ResetAppearance => {
                 self.theme = Theme::default();
                 self.scale = 1.0
             }
-            Message::Tab(tab) => self.tab = tab,
             Message::None => (),
         }
 
@@ -121,7 +510,10 @@ impl Application for Layout {
     }
 
     fn subscription(&self) -> Subscription<Self::Message> {
-        iced_native::subscription::events().map(Message::Event)
+        let mut subs = vec![iced_native::subscription::events().map(Message::Event)];
+        subs.extend(self.tasks.values().map(Task::subscription));
+
+        Subscription::batch(subs)
     }
 
     fn view(&mut self) -> Element<Self::Message> {
@@ -129,9 +521,19 @@ impl Application for Layout {
             View::Splash => splash::view(&self.theme),
             _ => match self.state {
                 ViewState::Auth(ref mut state) => state.view(&self.theme),
-                ViewState::Main(ref mut state) => {
-                    state.view(&self.tab, &mut self.tabs, &self.theme, self.scale)
-                }
+                ViewState::Main(ref mut state) => state.view(
+                    &self.theme,
+                    self.scale,
+                    &self.proxy_mode,
+                    self.activation.as_ref().unwrap(),
+                    self.w_id,
+                    &mut self.w_token,
+                    &self.tab,
+                    &mut self.tabs,
+                    &mut self.accounts,
+                    &mut self.proxies,
+                    &mut self.tasks,
+                ),
                 ViewState::None => Text::new("Unknown view state").into(),
             },
         };
@@ -145,5 +547,19 @@ impl Application for Layout {
 
     fn scale_factor(&self) -> f64 {
         self.scale
+    }
+
+    fn should_exit(&self) -> bool {
+        self.exit
+    }
+}
+
+fn load_file<T: for<'de> Deserialize<'de>>(path: &str, object: &mut T) {
+    let file = Path::new(path);
+    if file.exists() {
+        match from_reader::<File, T>(File::open(file).unwrap()) {
+            Ok(result) => *object = result,
+            Err(_) => (),
+        }
     }
 }

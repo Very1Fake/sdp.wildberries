@@ -1,3 +1,5 @@
+use iced::text_input;
+
 use auth::{AuthMsg, AuthViewState};
 use tabs::TabsViewState;
 
@@ -15,7 +17,10 @@ pub enum View {
 impl View {
     pub fn state(&self) -> ViewState {
         match *self {
-            View::Auth => ViewState::Auth(Default::default()),
+            View::Auth => ViewState::Auth(AuthViewState {
+                key_state: text_input::State::focused(),
+                ..Default::default()
+            }),
             View::Main => ViewState::Main(Default::default()),
             _ => ViewState::None,
         }

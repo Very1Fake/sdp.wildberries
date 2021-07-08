@@ -1,12 +1,23 @@
 [package]
 name = "app"
-version = "0.0.4"
+version = "0.0.16"
 authors = ["very1fake <very1fake.coder@gmail.com>"]
 edition = "2018"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
+blake3 = "0.3"
+chrono = "0.4"
 iced = { version = "0.3", default-features = false, features = ["debug", "tokio", "glow"] }
+iced_futures = "0.3"
 iced_native = "0.4"
 tokio = { version = "1.6", features = ["time"] }
+serde = { version = "1.0", default-features = false, features = ["derive"] }
+serde_json = { version = "1.0", default-features = false }
+serde_repr = "0.1"
+reqwest = { version = "0.11", features = ["cookies", "gzip", "json", "rustls-native-certs"] }
+sysinfo = "0.18"
+jsonwebtoken = "7.2"
+toml = "0.5"
+rand = "0.8"
