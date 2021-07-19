@@ -1,9 +1,9 @@
 use iced::{
-    button, pick_list, slider, text_input, Align, Button, Container, Element, Length, PickList,
-    Row, Text, TextInput,
+    button, pick_list, slider, text_input, Align, Button, Checkbox, Container, Element, Length,
+    PickList, Row, Text, TextInput,
 };
 
-use crate::{layout::Message, themes::Theme, VERSION};
+use crate::{layout::Message, settings::Settings, themes::Theme, VERSION};
 
 use super::{proxy::ProxyMode, section, tab, TabMsg};
 
@@ -11,6 +11,8 @@ use super::{proxy::ProxyMode, section, tab, TabMsg};
 pub enum SettingsMsg {
     IdChanged(String),
     TokenChanged(String),
+    ScaleChange(f64),
+    ScaleApply,
 }
 
 impl Into<Message> for SettingsMsg {
@@ -28,50 +30,59 @@ pub struct SettingsTab {
 
     pub theme_pick: pick_list::State<Theme>,
     pub scale_slider: slider::State,
+    pub scale_apply: button::State,
+    pub scale: f64,
 
     pub reset_btn: button::State,
     pub logout_btn: button::State,
 }
 
 impl SettingsTab {
-    pub fn update(&self, msg: SettingsMsg, w_id: &mut u128, w_token: &mut String) {
+    pub fn update(&mut self, msg: SettingsMsg, settings: &mut Settings) {
         match msg {
-            SettingsMsg::IdChanged(id) => match id.parse::<u128>() {
-                Ok(id) => *w_id = id,
+            SettingsMsg::IdChanged(id) => match id.parse::<u64>() {
+                Ok(id) => settings.webhook.id = id,
                 Err(_) => (),
             },
             SettingsMsg::TokenChanged(token) => {
-                *w_token = if token.len() > 68 {
+                settings.webhook.token = if token.len() > 68 {
                     token[0..=67].to_string()
                 } else {
                     token
                 }
             }
+            SettingsMsg::ScaleChange(scale) => self.scale = scale,
+            SettingsMsg::ScaleApply => settings.scale = self.scale,
         }
     }
 
-    pub fn view(
-        &mut self,
-        theme: &Theme,
-        scale: f64,
-        proxy_mode: &ProxyMode,
-        key: &String,
-        w_id: u128,
-        w_token: &String,
-    ) -> Element<Message> {
+    pub fn view(&mut self, settings: &Settings, key: &String) -> Element<Message> {
+        if self.scale == 0.0 {
+            self.scale = settings.scale;
+        }
+
+        let mut scale_apply = Button::new(&mut self.scale_apply, Text::new("Apply"));
+
+        if self.scale != settings.scale {
+            scale_apply = scale_apply.on_press(SettingsMsg::ScaleApply.into());
+        }
+
         tab(&String::from("Settings"))
             .push(
-                section("Discord webhook", theme)
+                section("Discord webhook", &settings.theme)
                     .push(
                         Row::new()
                             .push(Text::new("ID").width(Length::FillPortion(1)))
                             .push(
-                                TextInput::new(&mut self.id_input, "", &w_id.to_string(), |id| {
-                                    SettingsMsg::IdChanged(id).into()
-                                })
+                                TextInput::new(
+                                    &mut self.id_input,
+                                    "",
+                                    &settings.webhook.id.to_string(),
+                                    |id| SettingsMsg::IdChanged(id).into(),
+                                )
                                 .width(Length::FillPortion(2))
                                 .padding(8)
-                                .style(theme.text_input()),
+                                .style(settings.theme.text_input()),
                             )
                             .align_items(Align::Center),
                     )
@@ -79,25 +90,28 @@ impl SettingsTab {
                         Row::new()
                             .push(Text::new("Token").width(Length::FillPortion(1)))
                             .push(
-                                TextInput::new(&mut self.token_input, "", w_token, |token| {
-                                    SettingsMsg::TokenChanged(token).into()
-                                })
+                                TextInput::new(
+                                    &mut self.token_input,
+                                    "",
+                                    &settings.webhook.token,
+                                    |token| SettingsMsg::TokenChanged(token).into(),
+                                )
                                 .width(Length::FillPortion(2))
                                 .padding(8)
-                                .style(theme.text_input()),
+                                .style(settings.theme.text_input()),
                             )
                             .align_items(Align::Center),
                     ),
             )
             .push(
-                section("Connectivity", theme).push(
+                section("Connectivity", &settings.theme).push(
                     Row::new()
                         .push(Text::new("Proxy mode: ").width(Length::FillPortion(1)))
                         .push(
                             PickList::new(
                                 &mut self.proxy_mode,
                                 &ProxyMode::ALL[..],
-                                Some(proxy_mode.clone()),
+                                Some(settings.proxy_mode.clone()),
                                 Message::ProxyMode,
                             )
                             .width(Length::FillPortion(2)),
@@ -106,7 +120,7 @@ impl SettingsTab {
                 ),
             )
             .push(
-                section("Appearance", theme)
+                section("Appearance", &settings.theme)
                     .push(
                         Row::new()
                             .push(Text::new("Theme").width(Length::FillPortion(1)))
@@ -114,7 +128,7 @@ impl SettingsTab {
                                 PickList::new(
                                     &mut self.theme_pick,
                                     &Theme::ALL[..],
-                                    Some(theme.clone()),
+                                    Some(settings.theme.clone()),
                                     |new| Message::Theme(new),
                                 )
                                 .width(Length::FillPortion(2)),
@@ -124,37 +138,73 @@ impl SettingsTab {
                     .push(
                         Row::new()
                             .push(
-                                Text::new(format!("Scale (x{})", scale))
+                                Text::new(format!("Scale (x{})", self.scale))
                                     .width(Length::FillPortion(1)),
                             )
                             .push(
-                                slider::Slider::new(
-                                    &mut self.scale_slider,
-                                    50..=300u16,
-                                    (scale * 100.0) as u16,
-                                    |scale| Message::Scale(scale as f64 / 100.0),
-                                )
-                                .width(Length::FillPortion(2)),
-                            )
-                            .align_items(Align::Center),
+                                Row::new()
+                                    .push(
+                                        slider::Slider::new(
+                                            &mut self.scale_slider,
+                                            50..=300u16,
+                                            (self.scale * 100.0) as u16,
+                                            |scale| {
+                                                SettingsMsg::ScaleChange(scale as f64 / 100.0)
+                                                    .into()
+                                            },
+                                        )
+                                        .width(Length::Fill),
+                                    )
+                                    .push(scale_apply.style(settings.theme.primary_btn()))
+                                    .width(Length::FillPortion(2))
+                                    .spacing(8)
+                                    .align_items(Align::Center),
+                            ),
                     )
                     .push(
                         Container::new(
                             Button::new(&mut self.reset_btn, Text::new("Reset"))
                                 .on_press(Message::ResetAppearance)
                                 .padding(8)
-                                .style(theme.primary_btn()),
+                                .style(settings.theme.danger_btn()),
                         )
                         .width(Length::Fill)
                         .center_x(),
                     ),
             )
             .push(
-                section("About", theme)
+                section("Experimental", &settings.theme)
+                    .push(
+                        Row::new()
+                            .push(Text::new("Limiter").width(Length::FillPortion(1)))
+                            .push(
+                                Container::new(Checkbox::new(settings.limiter, "", |is| {
+                                    Message::Experimental(0, is)
+                                }))
+                                .width(Length::FillPortion(2))
+                                .center_x(),
+                            )
+                            .align_items(Align::Center),
+                    )
+                    .push(
+                        Row::new()
+                            .push(Text::new("Checker").width(Length::FillPortion(1)))
+                            .push(
+                                Container::new(Checkbox::new(settings.checker, "", |is| {
+                                    Message::Experimental(1, is)
+                                }))
+                                .width(Length::FillPortion(2))
+                                .center_x(),
+                            )
+                            .align_items(Align::Center),
+                    ),
+            )
+            .push(
+                section("About", &settings.theme)
                     .push(
                         Row::new()
                             .push(Text::new("Code Name").width(Length::FillPortion(1)))
-                            .push(Text::new("SDP Alpha").width(Length::FillPortion(2)))
+                            .push(Text::new("SDP Pre-alpha").width(Length::FillPortion(2)))
                             .align_items(Align::Center),
                     )
                     .push(
@@ -174,7 +224,7 @@ impl SettingsTab {
                             Button::new(&mut self.logout_btn, Text::new("Logout"))
                                 .on_press(Message::Logout)
                                 .padding(8)
-                                .style(theme.danger_btn()),
+                                .style(settings.theme.danger_btn()),
                         )
                         .width(Length::Fill)
                         .center_x(),

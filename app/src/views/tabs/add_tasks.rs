@@ -5,13 +5,15 @@ use iced::{
     PickList, Row, Text, TextInput,
 };
 use serde::Deserialize;
+use serde_json::from_str;
 
 use crate::{
     layout::Message,
-    logic::task::{Delivery, Task},
+    logic::{
+        misc::{request, BanKind, RespStatus},
+        task::{Delivery, Task},
+    },
     themes::Theme,
-    H_ACCEPT, H_ACCEPT_ENCODING, H_ACCEPT_LANGUAGE, H_CONNECTION, H_HOST,
-    H_UPGRADE_INSECURE_REQUESTS, H_USER_AGENT,
 };
 
 use super::{tab, TabMsg};
@@ -134,37 +136,37 @@ impl AddTasksTab {
 
                 return Command::perform(
                     async move {
-                        for _i in 0..=3u8 {
-                            return match Task::init_client(None)
-                                .get(format!("https://brandshop.ru/getproductsize/{}/", pid))
-                                .header("Host", H_HOST)
-                                .header("User-Agent", H_USER_AGENT)
-                                .header("Accept", H_ACCEPT)
-                                .header("Accept-Language", H_ACCEPT_LANGUAGE)
-                                .header("Accept-Encoding", H_ACCEPT_ENCODING)
-                                .header("Connection", H_CONNECTION)
-                                .header("Referer", "https://brandshop.ru/")
-                                .header("Upgrade-Insecure-Requests", H_UPGRADE_INSECURE_REQUESTS)
-                                .send()
-                                .await
-                            {
-                                Ok(resp) => {
-                                    if Task::variti_ban(&resp) {
-                                        continue;
-                                    } else {
-                                        let sizes = resp.json::<Vec<Size>>().await.unwrap();
-                                        if sizes.is_empty() {
-                                            ("Product doesn't exists or sold out", Vec::new())
-                                        } else {
-                                            ("", sizes)
-                                        }
-                                    }
+                        match request(
+                            &mut Task::init_client(None),
+                            &format!("https://brandshop.ru/getproductsize/{}/", pid),
+                            None,
+                            "https://brandshop.ru/",
+                            0,
+                        )
+                        .await
+                        {
+                            Ok(resp) => {
+                                let sizes = from_str::<Vec<Size>>(&resp.body).unwrap();
+                                if sizes.is_empty() {
+                                    ("Product doesn't exists or sold out", Vec::new())
+                                } else {
+                                    ("", sizes)
                                 }
-                                Err(_) => ("Connection error. Try again later", Vec::new()),
-                            };
+                            }
+                            Err(err) => {
+                                return (
+                                    match err {
+                                        RespStatus::Timeout => "Timeout",
+                                        RespStatus::ConnectionError => "Connection Error",
+                                        RespStatus::ProtectionBan(kind) => match kind {
+                                            BanKind::Variti => "Variti Ban",
+                                            BanKind::DDOSGuard => "Protection Ban",
+                                        },
+                                    },
+                                    Vec::new(),
+                                )
+                            }
                         }
-
-                        ("Can't check product (Variti Ban)", Vec::new())
                     },
                     move |(err, sizes)| {
                         if err.is_empty() {

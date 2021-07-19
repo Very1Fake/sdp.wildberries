@@ -1,4 +1,4 @@
 pub mod activation;
-mod misc;
+pub mod misc;
 pub mod task;
 pub mod validator;

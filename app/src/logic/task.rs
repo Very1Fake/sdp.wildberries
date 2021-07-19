@@ -1,6 +1,7 @@
 use std::{
     fmt::{Display, Formatter},
     hash::{Hash, Hasher},
+    sync::Arc,
     time::{Duration, Instant},
 };
 
@@ -9,14 +10,15 @@ use iced::{
 };
 use iced_futures::futures::stream;
 use iced_native::subscription::Recipe;
-use reqwest::{redirect::Policy, Client, Proxy, Response, StatusCode};
+use reqwest::{redirect::Policy, Client, Proxy, StatusCode};
 use serde::Deserialize;
-use serde_json::json;
+use serde_json::{from_str, json};
 use tokio::time::sleep;
 
 use crate::{
     icons::{icon, Icon},
     layout::Message,
+    settings::Webhook,
     themes::Theme,
     H_USER_AGENT, VERSION,
 };
@@ -64,6 +66,7 @@ struct Cart {
 
 #[derive(Eq, PartialEq, Clone, Debug)]
 pub enum Delivery {
+    Pickup,
     Flat,
     Shipard,
     EMS,
@@ -71,7 +74,8 @@ pub enum Delivery {
 }
 
 impl Delivery {
-    pub const ALL: [Delivery; 4] = [
+    pub const ALL: [Delivery; 5] = [
+        Delivery::Pickup,
         Delivery::Flat,
         Delivery::Shipard,
         Delivery::EMS,
@@ -80,6 +84,7 @@ impl Delivery {
 
     fn to_str(&self) -> &str {
         match *self {
+            Delivery::Pickup => "pickup",
             Delivery::Flat => "flat",
             Delivery::Shipard => "shipard",
             Delivery::EMS => "ems",
@@ -94,6 +99,7 @@ impl Display for Delivery {
             f,
             "{}",
             match *self {
+                Delivery::Pickup => "Pickup",
                 Delivery::Flat => "Courier delivery (Moscow, within MKAD)",
                 Delivery::Shipard => "Russian Post",
                 Delivery::EMS => "EMS (Russian Post)",
@@ -120,10 +126,12 @@ pub struct Task {
 
     pub login: String,
     pub password: String,
-    pub w_id: u128,
-    pub w_token: String,
+    pub webhook: Webhook,
+    pub flags: (bool, bool),
+
     pub progress: TaskProgress,
 
+    link: Arc<()>,
     state: TaskState,
 }
 
@@ -139,8 +147,8 @@ impl Task {
         delivery: Delivery,
         login: String,
         password: String,
-        w_id: u128,
-        w_token: String,
+        webhook: Webhook,
+        flags: (bool, bool),
     ) -> Task {
         Task {
             uid,
@@ -153,24 +161,24 @@ impl Task {
             delivery,
             login,
             password,
-            w_id,
-            w_token,
+            webhook,
+            flags,
             progress: TaskProgress::Start,
+            link: Arc::new(()),
             state: TaskState::default(),
         }
     }
 
     pub fn init_client(proxy: Option<String>) -> Client {
-        // use std::sync::Arc;
-
-        // let mut tls = rustls::ClientConfig::new();
-        // tls.set_protocols(&["h2".into(), "http/1.1".into()]);
-        // tls.root_store.add_server_trust_anchors(&webpki_roots::TLS_SERVER_ROOTS);
-        // tls.key_log = Arc::new(rustls::KeyLogFile::new());
+        let mut tls = rustls::ClientConfig::new();
+        tls.set_protocols(&["http/1.1".into()]);
+        tls.root_store
+            .add_server_trust_anchors(&webpki_roots::TLS_SERVER_ROOTS);
+        tls.key_log = Arc::new(rustls::KeyLogFile::new());
 
         let mut client = Client::builder()
             .tcp_keepalive(Some(Duration::from_secs(4)))
-            // .use_preconfigured_tls(tls)
+            .use_preconfigured_tls(tls)
             .redirect(Policy::custom(|attempt| {
                 if attempt.previous().len() > 10 {
                     attempt.error("too many redirects")
@@ -187,6 +195,9 @@ impl Task {
             .user_agent(H_USER_AGENT)
             .gzip(true)
             .https_only(true)
+            // .http2_adaptive_window(true)
+            // .http2_initial_stream_window_size(Some(131072))
+            // .http2_max_frame_size(16384)
             .http1_title_case_headers();
 
         match proxy {
@@ -197,23 +208,6 @@ impl Task {
         }
 
         client.build().unwrap()
-    }
-
-    pub fn variti_ban(resp: &Response) -> bool {
-        if resp.status() == StatusCode::OK {
-            match resp.headers().get("Server").unwrap().to_str() {
-                Ok(server) => {
-                    if server.starts_with("Variti") {
-                        true
-                    } else {
-                        false
-                    }
-                }
-                Err(_) => false,
-            }
-        } else {
-            false
-        }
     }
 
     pub fn update(&mut self, msg: TaskMsg) {
@@ -340,11 +334,15 @@ impl Task {
                     login: self.login.clone(),
                     password: self.password.clone(),
                     delivery: self.delivery.clone(),
-                    w_id: self.w_id,
-                    w_token: self.w_token.clone(),
+                    webhook: self.webhook.clone(),
+                    flags: self.flags.clone(),
                     client: Task::init_client(self.proxy.clone()),
+                    progress: TaskProgress::Start,
                     step: BackgroundStep::Start,
+                    substep: 0,
                     start: Instant::now(),
+                    stopped: false,
+                    link: self.link.clone(),
                 },
             })
             .map(Message::TaskProgressed),
@@ -474,29 +472,56 @@ where
         let uid = self.uid;
 
         Box::pin(stream::unfold(self.state, move |mut state| async move {
-            let mut task_progress = None;
-
-            match state.step {
-                BackgroundStep::Start => {
-                    state.step = BackgroundStep::WarmingUp;
-                    task_progress = Some(TaskProgress::WarmingUp);
-                }
-                BackgroundStep::WarmingUp => {
-                    match request(
-                        &mut state.client,
-                        "https://brandshop.ru/",
-                        None,
-                        "https://google.ru/",
-                        0,
-                        "A",
-                    )
-                    .await
-                    {
-                        Ok(_) => {}
-                        Err(err) => task_progress = err,
+            async fn checkout(client: &mut Client, tier: &'static str) -> LoopAction {
+                match request(
+                    client,
+                    "https://brandshop.ru/checkout/",
+                    None,
+                    "https://brandshop.ru/",
+                    rand_millis(28..=30),
+                )
+                .await
+                {
+                    Ok(resp) => {
+                        if resp.status != StatusCode::OK {
+                            LoopAction::Error(String::from("Something went wrong"), true)
+                        } else {
+                            LoopAction::Continue
+                        }
                     }
-                    if task_progress.is_none() {
-                        match request(
+                    Err(err) => LoopAction::Error(err.task_progress(tier), false),
+                }
+            }
+            if state.stopped {
+                return None;
+            }
+
+            loop {
+                if Arc::strong_count(&state.link) == 1 {
+                    println!("Task dropped");
+                    return None;
+                }
+
+                let mut action = LoopAction::Continue;
+
+                match state.step {
+                    BackgroundStep::Start => {
+                        action = LoopAction::Move(BackgroundStep::WarmingUp, None);
+                    }
+                    BackgroundStep::WarmingUp => match state.substep {
+                        0 => match request(
+                            &mut state.client,
+                            "https://brandshop.ru/",
+                            None,
+                            "https://google.ru/",
+                            0,
+                        )
+                            .await
+                        {
+                            Ok(_) => {},
+                            Err(err) => action = LoopAction::Error(err.task_progress("A"), false),
+                        },
+                        1 => match request(
                             &mut state.client,
                             "https://brandshop.ru/login/",
                             Some(&[
@@ -505,47 +530,53 @@ where
                                 ("redirect", ""),
                             ]),
                             "https://brandshop.ru/login/",
-                            rand_millis(45..=50),
-                            "B/1",
+                            if state.flags.0 {
+                                rand_millis(45..=50)
+                            } else {
+                                0
+                            },
                         )
-                        .await
+                            .await
                         {
                             Ok(resp) => {
-                                if resp.status() == StatusCode::FOUND {
+                                if resp.status == StatusCode::FOUND {
                                     match request(
                                         &mut state.client,
                                         "https://brandshop.ru/account/",
                                         None,
                                         "https://brandshop.ru/login/",
-                                        rand_millis(24..=26),
-                                        "B/2",
+                                        if state.flags.0 {
+                                            rand_millis(24..=26)
+                                        } else {
+                                            0
+                                        },
                                     )
-                                    .await
+                                        .await
                                     {
                                         Ok(_) => {}
-                                        Err(err) => task_progress = err,
+                                        Err(err) => action = LoopAction::Error(err.task_progress("B/2"), false),
                                     }
                                 } else {
-                                    task_progress =
-                                        Some(TaskProgress::Error(String::from("Bad credentials")));
+                                    action = LoopAction::Error(String::from("Bad credentials"), true);
                                 }
                             }
-                            Err(err) => task_progress = err,
-                        }
-                    }
-                    if task_progress.is_none() {
-                        match request(
+                            Err(err) => action = LoopAction::Error(err.task_progress("B/1"), false),
+                        },
+                        2 => match request(
                             &mut state.client,
                             "https://brandshop.ru/xhr/cart/",
                             None,
                             "https://brandshop.ru/",
-                            rand_millis(28..=30),
-                            "C/2",
+                            if state.flags.0 {
+                                rand_millis(28..=30)
+                            } else {
+                                0
+                            },
                         )
-                        .await
+                            .await
                         {
                             Ok(resp) => {
-                                let cart = resp.json::<Cart>().await.unwrap();
+                                let cart = from_str::<Cart>(&resp.body).unwrap();
                                 if !cart.products.is_empty() {
                                     for product in cart.products {
                                         match request(
@@ -556,10 +587,13 @@ where
                                                 "0",
                                             )]),
                                             "https://brandshop.ru/",
-                                            rand_millis(9..=11),
-                                            "C/2",
+                                            if state.flags.0 {
+                                                rand_millis(9..=11)
+                                            } else {
+                                                0
+                                            },
                                         )
-                                        .await
+                                            .await
                                         {
                                             Ok(_) => (),
                                             Err(_) => (),
@@ -567,131 +601,114 @@ where
                                     }
                                 }
 
-                                state.step = BackgroundStep::Processing;
-                                task_progress = Some(TaskProgress::Processing);
+                                action = LoopAction::Move(BackgroundStep::Processing {
+                                    link: String::new(),
+                                }, None);
                             }
-                            Err(err) => task_progress = err,
-                        }
-                    }
-                }
-                BackgroundStep::Processing => {
-                    match request(
-                        &mut state.client,
-                        "https://brandshop.ru/index.php?route=checkout/cart/add",
-                        Some(&[
-                            ("quantity", "1"),
-                            ("product_id", &state.pid),
-                            ("option_value_id", &state.sv),
-                            (format!("option[{}]", &state.option).as_str(), &state.so),
-                        ]),
-                        "https://brandshop.ru/",
-                        rand_millis(45..=50),
-                        "D",
-                    )
-                    .await
-                    {
-                        Ok(resp) => {
-                            if resp.text().await.unwrap() == "[]" {
-                                task_progress = Some(TaskProgress::Failed(String::from(
-                                    "Can't add product to cart",
-                                )));
-                            }
-                        }
-                        Err(err) => task_progress = err,
-                    }
-                    if task_progress.is_none() {
-                        match request(
+                            Err(err) => action = LoopAction::Error(err.task_progress("C/1"), false),
+                        },
+                        _ => {}
+                    },
+                    BackgroundStep::Processing { ref mut link } => match state.substep {
+                        0 => match request(
                             &mut state.client,
-                            "https://brandshop.ru/checkout/",
-                            None,
+                            "https://brandshop.ru/index.php?route=checkout/cart/add",
+                            Some(&[
+                                ("quantity", "1"),
+                                ("product_id", &state.pid),
+                                ("option_value_id", &state.sv),
+                                (format!("option[{}]", &state.option).as_str(), &state.so),
+                            ]),
                             "https://brandshop.ru/",
-                            rand_millis(28..=30),
-                            "E",
+                            if state.flags.0 {
+                                rand_millis(45..=50)
+                            } else {
+                                0
+                            },
                         )
-                        .await
+                            .await
                         {
                             Ok(resp) => {
-                                if resp.status() != StatusCode::OK {
-                                    task_progress = Some(TaskProgress::Failed(String::from(
-                                        "Something went wrong",
-                                    )));
+                                if resp.body == "[]" {
+                                    action = LoopAction::Error(String::from(
+                                        "Can't add product to cart",
+                                    ), true);
                                 }
                             }
-                            Err(err) => task_progress = err,
-                        }
-                    }
-                    if task_progress.is_none() {
-                        match request(&mut state.client, "https://brandshop.ru/index.php?route=checkout/checkout/setshippingmethod", Some(&[("shipping_method", state.delivery.to_str())]), "https://brandshop.ru/checkout/", rand_millis(24..=26), "F").await {
-                            Ok(resp) => if !resp.json::<Checker>().await.unwrap().ok() {
-                                task_progress = Some(TaskProgress::Failed(String::from(
-                                    "Can't select delivery method",
-                                )));
-                            }
-                            Err(err) => task_progress = err,
-                        }
-                    }
-                    if task_progress.is_none() {
-                        match request(&mut state.client, "https://brandshop.ru/index.php?route=checkout/checkout/setpaymentmethod", Some(&[("payment_method", "payture")]), "https://brandshop.ru/checkout/", rand_millis(28..=30), "G").await {
-                            Ok(resp) => if !resp.json::<Checker>().await.unwrap().ok() {
-                                task_progress = Some(TaskProgress::Failed(String::from(
-                                    "Can't select payment method",
-                                )));
-                            }
-                            Err(err) => task_progress = err,
-                        }
-                    }
-                    if task_progress.is_none() {
-                        match request(
+                            Err(err) => action = LoopAction::Error(err.task_progress("D"), false),
+                        },
+                        1 => action = checkout(&mut state.client, "E").await,
+                        2 => match request(
                             &mut state.client,
+                            "https://brandshop.ru/index.php?route=checkout/checkout/setshippingmethod",
+                            Some(&[("shipping_method", state.delivery.to_str())]),
                             "https://brandshop.ru/checkout/",
-                            None,
-                            "https://brandshop.ru/",
-                            rand_millis(28..=30),
-                            "H",
+                            if state.flags.0 {
+                                rand_millis(24..=26)
+                            } else {
+                                0
+                            },
                         )
-                        .await
+                            .await
                         {
                             Ok(resp) => {
-                                if resp.status() != StatusCode::OK {
-                                    task_progress = Some(TaskProgress::Failed(String::from(
-                                        "Something went wrong",
-                                    )));
+                                if !from_str::<Checker>(&resp.body).unwrap().ok() {
+                                    action = LoopAction::Error(String::from(
+                                        "Can't select delivery method",
+                                    ), true);
                                 }
                             }
-                            Err(err) => task_progress = err,
-                        }
-                    }
-
-                    let mut link = String::new();
-
-                    if task_progress.is_none() {
-                        match request(
+                            Err(err) => action = LoopAction::Error(err.task_progress("F"), false),
+                        },
+                        3 => match request(
+                            &mut state.client,
+                            "https://brandshop.ru/index.php?route=checkout/checkout/setpaymentmethod",
+                            Some(&[("payment_method", "payture")]),
+                            "https://brandshop.ru/checkout/",
+                            if state.flags.0 {
+                                rand_millis(28..=30)
+                            } else {
+                                0
+                            },
+                        )
+                            .await
+                        {
+                            Ok(resp) => {
+                                if !from_str::<Checker>(&resp.body).unwrap().ok() {
+                                    action = LoopAction::Error(String::from("Can't select payment method"), true);
+                                }
+                            }
+                            Err(err) => action = LoopAction::Error(err.task_progress("G"), false),
+                        },
+                        4 => action = checkout(&mut state.client, "H").await,
+                        5 => match request(
                             &mut state.client,
                             "https://brandshop.ru/xhr/payture/",
                             Some(&[]),
                             "https://brandshop.ru/checkout/",
-                            rand_millis(10..=15),
-                            "I",
+                            if state.flags.0 {
+                                rand_millis(10..=15)
+                            } else {
+                                0
+                            },
                         )
-                        .await
+                            .await
                         {
                             Ok(resp) => {
-                                let result = resp.json::<Checker>().await.unwrap();
+                                let result = from_str::<Checker>(&resp.body).unwrap();
                                 if result.ok() {
-                                    link = result.success;
+                                    *link = result.success;
                                 } else {
-                                    task_progress = Some(TaskProgress::Failed(String::from(
+                                    action = LoopAction::Error(String::from(
                                         "Can't retrieve payment link",
-                                    )));
+                                    ), false);
                                 }
                             }
-                            Err(err) => task_progress = err,
-                        }
-                    }
-                    if task_progress.is_none() {
-                        match state
+                            Err(err) => action = LoopAction::Error(err.task_progress("I"), false),
+                        },
+                        6 => match state
                             .client
-                            .get(&link)
+                            .get(link.clone())
                             .header("Referer", "https://brandshop.ru/")
                             .send()
                             .await
@@ -699,8 +716,8 @@ where
                             Ok(resp) => {
                                 if resp.headers().get("Transfer-Encoding").is_some() {
                                     let body = resp.text().await.unwrap();
-                                    state.step = BackgroundStep::Success {
-                                        link,
+                                    action = LoopAction::Move(BackgroundStep::Success {
+                                        link: link.clone(),
                                         total: match retrieve(&body, r#"al" value=""#, "\"") {
                                             Some(sum) => sum,
                                             None => String::from("-"),
@@ -709,36 +726,32 @@ where
                                             Some(oid) => oid,
                                             None => String::from("-"),
                                         },
-                                    };
-                                    task_progress = Some(TaskProgress::Success(Some(
-                                        String::from("Sending link"),
-                                    )));
+                                    }, Some(String::from("Sending link")));
                                 } else {
-                                    task_progress = Some(TaskProgress::Failed(String::from(
-                                        "Payment link broken",
-                                    )));
+                                    action =
+                                        LoopAction::Error(String::from("Payment link broken"), true);
                                 }
                             }
                             Err(err) => {
-                                task_progress = if err.is_timeout() {
-                                    Some(TaskProgress::Error(String::from("Timeout")))
+                                action = if err.is_timeout() {
+                                    LoopAction::Error(String::from("Timeout"), false)
                                 } else {
-                                    Some(TaskProgress::Error(String::from(
+                                    LoopAction::Error(String::from(
                                         "Connection error. Try again later",
-                                    )))
+                                    ), false)
                                 }
                             }
-                        }
-                    }
-                }
-                BackgroundStep::Success {
-                    ref link,
-                    ref total,
-                    ref order,
-                } => {
-                    let resp = Task::init_client(None)
-                        .post(format!("https://discord.com/api/webhooks/{}/{}", state.w_id, state.w_token))
-                        .json(&json!({
+                        },
+                        _ => {}
+                    },
+                    BackgroundStep::Success {
+                        ref link,
+                        ref total,
+                        ref order,
+                    } => {
+                        let resp = Task::init_client(None)
+                            .post(format!("https://discord.com/api/webhooks/{}/{}", state.webhook.id, state.webhook.token))
+                            .json(&json!({
                             "username": "SDP",
                             "embeds": [{
                                 "title": "Payment link generated",
@@ -760,80 +773,82 @@ where
                                 }
                             }]
                         }))
-                        .send()
-                        .await
-                        .unwrap();
-
-                    if resp.status() == StatusCode::NO_CONTENT {
-                        task_progress = Some(TaskProgress::PostSuccess(Some(String::from(
-                            "Checker: Starting",
-                        ))));
-                        state.step = BackgroundStep::PostSuccess {
-                            order: order.clone(),
-                            attempt: 0,
-                            substep: 0,
-                        };
-                    } else {
-                        task_progress = Some(TaskProgress::Error(String::from("Webhook error")));
-                    }
-                }
-                BackgroundStep::PostSuccess {
-                    ref order,
-                    ref mut attempt,
-                    ref mut substep,
-                } => {
-                    let c = substep.clone();
-                    match c {
-                        0 => {
-                            if *attempt == 120 {
-                                task_progress = Some(TaskProgress::Failed(String::from(
-                                    "Checker: order not detected",
-                                )));
-                            } else {
-                                sleep(Duration::from_secs(3)).await;
-                                task_progress = Some(TaskProgress::PostSuccess(Some(
-                                    String::from("Checker: Waiting"),
-                                )));
-                                *substep = 1;
-                            }
-                        }
-                        1 => {
-                            sleep(Duration::from_secs(27)).await;
-                            task_progress = Some(TaskProgress::PostSuccess(Some(String::from(
-                                "Checker: Scanning",
-                            ))));
-                            *substep = 2;
-                        }
-                        2 => {
-                            match request(
-                                &mut state.client,
-                                "https://brandshop.ru/order/",
-                                Some(&[]),
-                                "https://brandshop.ru/account/",
-                                rand_millis(10..=15),
-                                "J",
-                            )
+                            .send()
                             .await
-                            {
-                                Ok(resp) => {
-                                    let body = resp.text().await.unwrap();
+                            .unwrap();
 
-                                    if let Some(order_body) = retrieve(&body, &order, "</li>") {
-                                        if let Some(date) =
-                                            retrieve(&order_body, "sm-3\">", "</div>")
+                        if resp.status() == StatusCode::NO_CONTENT {
+                            if state.flags.1 {
+                                action = LoopAction::Move(BackgroundStep::PostSuccess {
+                                    order: order.clone(),
+                                    attempt: 0,
+                                }, Some(String::from("Checker: Starting")));
+                            } else {
+                                action = LoopAction::Complete;
+                            }
+                        } else {
+                            action = LoopAction::Error(String::from("Webhook error"), false);
+                        }
+                    }
+                    BackgroundStep::PostSuccess {
+                        ref order,
+                        ref mut attempt,
+                    } => {
+                        match state.substep {
+                            0 => {
+                                sleep(Duration::from_secs(3)).await;
+                                action = LoopAction::Break(Some(
+                                    String::from("Checker: Waiting"),
+                                ));
+                            }
+                            1 => {
+                                if *attempt == 120 {
+                                    action = LoopAction::Error(String::from(
+                                        "Checker: order not detected",
+                                    ), true);
+                                } else {
+                                    sleep(Duration::from_secs(30)).await;
+                                    action = LoopAction::Break(Some(String::from(
+                                        "Checker: Scanning",
+                                    )));
+                                }
+                            }
+                            2 => {
+                                match request(
+                                    &mut state.client,
+                                    "https://brandshop.ru/order/",
+                                    Some(&[]),
+                                    "https://brandshop.ru/account/",
+                                    if state.flags.0 {
+                                        rand_millis(10..=15)
+                                    } else {
+                                        0
+                                    },
+                                )
+                                    .await
+                                {
+                                    Ok(resp) => {
+                                        if let Some(order_body) = retrieve(&resp.body, &order, "</li>")
                                         {
-                                            if let Some(total) =
-                                                retrieve(&order_body, "-sm\">", " <em")
+                                            let mut ok = false;
+
+                                            if let Some(date) =
+                                            retrieve(&order_body, "sm-3\">", "</div>")
                                             {
-                                                if let Some(status) = retrieve(
-                                                    &order_body,
-                                                    "em></div>
+                                                if let Some(total) =
+                                                retrieve(&order_body, "-sm\">", " <em")
+                                                {
+                                                    if let Some(status) = retrieve(
+                                                        &order_body,
+                                                        "em></div>
                                 <div class=\"col col-2 col-sm-12 hidden-sm\">",
-                                                    "</div>",
-                                                ) {
-                                                    let resp = Task::init_client(None)
-                                                        .post(format!("https://discord.com/api/webhooks/{}/{}", state.w_id, state.w_token))
-                                                        .json(&json!({
+                                                        "</div>",
+                                                    ) {
+                                                        ok = true;
+
+                                                        let resp = Task::init_client(None)
+                                                            .post(format!("https://discord.com/api/webhooks/{}/{}", state.webhook.id, state.webhook.token))
+                                                            .json(&json!({
                                                             "username": "SDP",
                                                             "embeds": [{
                                                                 "title": "Order processed",
@@ -853,58 +868,104 @@ where
                                                                 }
                                                             }]
                                                         }))
-                                                        .send()
-                                                        .await
-                                                        .unwrap();
+                                                            .send()
+                                                            .await
+                                                            .unwrap();
 
-                                                    if resp.status() == StatusCode::NO_CONTENT {
-                                                        task_progress =
-                                                            Some(TaskProgress::Complete);
-                                                    } else {
-                                                        task_progress = Some(TaskProgress::Error(
-                                                            String::from("Checker: Webhook error"),
-                                                        ));
+                                                        if resp.status() == StatusCode::NO_CONTENT {
+                                                            action = LoopAction::Complete;
+                                                        } else {
+                                                            action = LoopAction::Error(
+                                                                String::from("Checker: Webhook error"),
+                                                                false
+                                                            );
+                                                        }
                                                     }
                                                 }
                                             }
-                                        }
 
-                                        if task_progress.is_none() {
-                                            task_progress = Some(TaskProgress::Failed(
-                                                String::from("Checker: Something went wrong"),
-                                            ))
+                                            if ok {
+                                                action = LoopAction::Error(
+                                                    String::from("Checker: Can't retrieve order data"),
+                                                    true
+                                                )
+                                            }
+                                        } else {
+                                            state.substep = 0;
+                                            *attempt += 1;
+                                            action = LoopAction::Break(Some(
+                                                String::from("Checker: Waiting"),
+                                            ));
                                         }
                                     }
+                                    Err(err) => action = LoopAction::Error(err.task_progress("J"), false),
                                 }
-                                Err(err) => task_progress = err,
                             }
-
-                            if task_progress.is_none() {
-                                *substep = 0;
-                                *attempt += 1;
-                                task_progress = Some(TaskProgress::PostSuccess(Some(
-                                    String::from("Checker: Waiting"),
-                                )));
-                            }
-                        }
-                        _ => {
-                            task_progress = Some(TaskProgress::Error(String::from("Checker down")))
+                            _ => action = LoopAction::Error(String::from("Checker down"), false)
                         }
                     }
                 }
-                BackgroundStep::Stop => {
-                    return None;
+
+                match action {
+                    LoopAction::Continue => state.substep += 1,
+                    LoopAction::Error(ref msg, fail) => {
+                        state.progress = if fail {
+                            TaskProgress::Failed(String::from(msg))
+                        } else {
+                            TaskProgress::Error(String::from(msg))
+                        }
+                    }
+                    LoopAction::Break(ref msg) => {
+                        let cloned = msg.clone();
+                        state.substep += 1;
+
+                        match state.progress {
+                            TaskProgress::Success(_) => {
+                                state.progress = TaskProgress::Success(cloned)
+                            }
+                            TaskProgress::PostSuccess(_) => {
+                                state.progress = TaskProgress::PostSuccess(cloned)
+                            }
+                            TaskProgress::Failed(_) => match cloned {
+                                Some(val) => state.progress = TaskProgress::Failed(val),
+                                None => {}
+                            },
+                            TaskProgress::Error(_) => match cloned {
+                                Some(val) => state.progress = TaskProgress::Error(val),
+                                None => {}
+                            },
+                            _ => {}
+                        }
+                    }
+                    LoopAction::Move(ref step, ref msg) => {
+                        state.progress = match step {
+                            BackgroundStep::Start => TaskProgress::Start,
+                            BackgroundStep::WarmingUp => TaskProgress::WarmingUp,
+                            BackgroundStep::Processing { .. } => TaskProgress::Processing,
+                            BackgroundStep::Success { .. } => TaskProgress::Success(msg.clone()),
+                            BackgroundStep::PostSuccess { .. } => {
+                                TaskProgress::PostSuccess(msg.clone())
+                            }
+                        };
+                        state.step = step.clone();
+                    }
+                    LoopAction::Complete => {
+                        state.progress = TaskProgress::Complete;
+                        state.stopped = true;
+                    }
+                }
+
+                if let LoopAction::Continue = action {
+                } else {
+                    if let LoopAction::Break(_) = action {
+                    } else {
+                        state.substep = 0;
+                    }
+                    break;
                 }
             }
 
-            match task_progress.clone().unwrap() {
-                TaskProgress::Complete | TaskProgress::Failed(_) | TaskProgress::Error(_) => {
-                    state.step = BackgroundStep::Stop;
-                }
-                _ => (),
-            }
-
-            Some(((uid, task_progress.unwrap()), state))
+            Some(((uid, state.progress.clone()), state))
         }))
     }
 }
@@ -918,18 +979,26 @@ struct BackgroundState {
 
     login: String,
     password: String,
-    w_id: u128,
-    w_token: String,
+    webhook: Webhook,
+    flags: (bool, bool),
 
     client: Client,
+    progress: TaskProgress,
+
     step: BackgroundStep,
+    substep: u8,
     start: Instant,
+    stopped: bool,
+    link: Arc<()>,
 }
 
+#[derive(Clone)]
 enum BackgroundStep {
     Start,
     WarmingUp,
-    Processing,
+    Processing {
+        link: String,
+    },
     Success {
         link: String,
         order: String,
@@ -938,7 +1007,14 @@ enum BackgroundStep {
     PostSuccess {
         order: String,
         attempt: u8,
-        substep: u8,
     },
-    Stop,
+}
+
+enum LoopAction {
+    Continue,
+    Error(String, bool),
+
+    Break(Option<String>),
+    Move(BackgroundStep, Option<String>),
+    Complete,
 }

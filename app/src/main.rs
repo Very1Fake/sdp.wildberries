@@ -7,6 +7,7 @@ use layout::Layout;
 mod icons;
 mod layout;
 mod logic;
+mod settings;
 mod themes;
 mod views;
 

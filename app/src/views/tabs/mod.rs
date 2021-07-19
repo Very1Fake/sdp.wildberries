@@ -7,13 +7,14 @@ use iced::{
 
 use accounts::Account;
 use add_tasks::AddTasksMsg;
-use proxy::{Proxy, ProxyMode};
+use proxy::Proxy;
 use settings::SettingsMsg;
 
 use crate::{
     icons::{icon, Icon},
     layout::Message,
     logic::{activation::Activation, task::Task},
+    settings::Settings,
     themes::Theme,
 };
 
@@ -37,12 +38,8 @@ pub struct TabsViewState {
 impl TabsViewState {
     pub fn view<'a>(
         &'a mut self,
-        theme: &Theme,
-        scale: f64,
-        proxy_mode: &'a ProxyMode,
+        settings: &mut Settings,
         activation: &Activation,
-        w_id: u128,
-        w_token: &String,
         tab: &usize,
         tabs: &'a mut Vec<(String, Tab, button::State)>,
         accounts: &'a mut Vec<Account>,
@@ -60,14 +57,14 @@ impl TabsViewState {
                     button::Button::new(b, icon(t.icon()).size(32).width(Length::Units(32)))
                         .on_press(Message::Tab(0))
                         .padding(16)
-                        .style(theme.icon_button()),
+                        .style(settings.theme.icon_button()),
                 );
             } else {
                 tab_bar = tab_bar.push(
                     button::Button::new(b, icon(t.icon()).size(32).width(Length::Units(32)))
                         .on_press(Message::Tab(i))
                         .padding(16)
-                        .style(theme.icon_button()),
+                        .style(settings.theme.icon_button()),
                 );
             }
 
@@ -89,25 +86,20 @@ impl TabsViewState {
                     Container::new(
                         Container::new(match current_tab {
                             Some(tab) => match tab {
-                                Tab::Home(ref mut state) => {
-                                    content_scroll.push(state.view(theme, &activation)).into()
-                                }
-                                Tab::Settings(ref mut state) => content_scroll
-                                    .push(state.view(
-                                        theme,
-                                        scale,
-                                        proxy_mode,
-                                        &activation.key,
-                                        w_id,
-                                        w_token,
-                                    ))
+                                Tab::Home(ref mut state) => content_scroll
+                                    .push(state.view(&settings.theme, &activation))
                                     .into(),
-                                Tab::Tasks(ref mut state) => state.view(theme, tasks),
+                                Tab::Settings(ref mut state) => content_scroll
+                                    .push(state.view(settings, &activation.key))
+                                    .into(),
+                                Tab::Tasks(ref mut state) => state.view(&settings.theme, tasks),
                                 Tab::AddTasks(ref mut state) => {
-                                    content_scroll.push(state.view(theme)).into()
+                                    content_scroll.push(state.view(&settings.theme)).into()
                                 }
-                                Tab::Accounts(ref mut state) => state.view(theme, accounts),
-                                Tab::Proxy(ref mut state) => state.view(theme, proxies),
+                                Tab::Accounts(ref mut state) => {
+                                    state.view(&settings.theme, accounts)
+                                }
+                                Tab::Proxy(ref mut state) => state.view(&settings.theme, proxies),
                             },
                             None => Text::new(format!("Unknown tab: {}", tab)).into(),
                         })

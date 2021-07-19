@@ -1,7 +1,7 @@
 use std::{ops::RangeInclusive, time::Duration};
 
 use rand::{thread_rng, Rng};
-use reqwest::{Client, Response};
+use reqwest::{header::HeaderMap, Client, StatusCode, Version};
 use tokio::time::sleep;
 
 use crate::{
@@ -9,7 +9,83 @@ use crate::{
     H_UPGRADE_INSECURE_REQUESTS, H_USER_AGENT,
 };
 
-use super::task::{Task, TaskProgress};
+pub enum BanKind {
+    Variti,
+    DDOSGuard,
+}
+
+pub enum RespStatus {
+    Timeout,
+    ConnectionError,
+    ProtectionBan(BanKind),
+}
+
+impl RespStatus {
+    pub fn task_progress(&self, tier: &str) -> String {
+        match &self {
+            RespStatus::Timeout => String::from("Timeout"),
+            RespStatus::ConnectionError => String::from("Connection Error"),
+            RespStatus::ProtectionBan(kind) => {
+                if !tier.is_empty() {
+                    match kind {
+                        BanKind::Variti => format!("Variti Ban ({})", tier),
+                        BanKind::DDOSGuard => format!("Protection Ban ({})", tier),
+                    }
+                } else {
+                    String::from("Protection Ban")
+                }
+            }
+        }
+    }
+}
+
+pub enum Method {
+    GET,
+    POST,
+}
+
+pub struct Resp {
+    pub method: Method,
+    pub version: Version,
+    pub status: StatusCode,
+
+    pub headers: HeaderMap,
+
+    pub body: String,
+}
+
+impl Resp {
+    pub fn ban_check(&self) -> Option<BanKind> {
+        match self.headers.get("Server").unwrap().to_str() {
+            // Variti protection
+            Ok(server) => {
+                if server.starts_with("Variti") {
+                    return Some(BanKind::Variti);
+                }
+            }
+            Err(_) => {}
+        }
+        match self.headers.get("Server").unwrap().to_str() {
+            // DDOS Guard protection
+            Ok(server) => {
+                if server == "ddos-guard" {
+                    if self.body.contains("<title>DDOS-GUARD</title>") {
+                        return Some(BanKind::DDOSGuard);
+                    }
+
+                    if let Method::GET = self.method {
+                        if self.body.is_empty() {
+                            return Some(BanKind::DDOSGuard);
+                        }
+                    }
+                }
+            }
+            Err(_) => {}
+        }
+
+        None
+    }
+}
 
 pub async fn request<'a>(
     client: &mut Client,
@@ -17,15 +93,17 @@ pub async fn request<'a>(
     form: Option<&'a [(&'a str, &'a str)]>,
     referer: &str,
     delay: u64,
-    tier: &str,
-) -> Result<Response, Option<TaskProgress>> {
+) -> Result<Resp, RespStatus> {
     #[cfg(debug_assertions)]
     println!("WAITING FOR GET: {}", url);
     sleep(Duration::from_millis(delay)).await;
+    let mut method;
 
     for _attempt in 0u8..=3 {
         match match form {
             Some(data) => {
+                method = Method::POST;
+
                 #[cfg(debug_assertions)]
                 println!("POST REQUEST ON: {}", url);
                 let mut client = client
@@ -48,6 +126,8 @@ pub async fn request<'a>(
                 client.send().await
             }
             None => {
+                method = Method::GET;
+
                 #[cfg(debug_assertions)]
                 println!("GET REQUEST ON: {}", url);
                 client
@@ -65,26 +145,46 @@ pub async fn request<'a>(
             }
         } {
             Ok(resp) => {
-                if Task::variti_ban(&resp) {
-                    continue;
-                } else {
-                    return Ok(resp);
+                let mut result = Resp {
+                    method,
+                    version: resp.version(),
+                    status: resp.status(),
+                    headers: resp.headers().clone(),
+                    body: String::new(),
+                };
+
+                match resp.text().await {
+                    Ok(text) => result.body = text,
+                    Err(err) => {
+                        return if err.is_timeout() {
+                            Err(RespStatus::Timeout)
+                        } else {
+                            Err(RespStatus::ConnectionError)
+                        }
+                    }
+                }
+
+                match result.ban_check() {
+                    Some(_) => continue,
+                    None => return Ok(result),
                 }
             }
             Err(err) => {
                 return if err.is_timeout() {
-                    Err(Some(TaskProgress::Error(String::from("Timeout"))))
+                    Err(RespStatus::Timeout)
                 } else {
-                    Err(Some(TaskProgress::Error(String::from(
-                        "Connection error. Try again later",
-                    ))))
+                    Err(RespStatus::ConnectionError)
                 }
             }
         }
     }
 
-    Err(Some(TaskProgress::Error(format!("Variti Ban ({})", tier))))
+    Err(RespStatus::ProtectionBan(BanKind::DDOSGuard))
 }
+
+////////////////////////////////////////////////////////////////////////////////////////////////////
+// String tools
+////////////////////////////////////////////////////////////////////////////////////////////////////
 
 pub fn retrieve(text: &String, start: &str, end: &str) -> Option<String> {
     match text.find(start) {

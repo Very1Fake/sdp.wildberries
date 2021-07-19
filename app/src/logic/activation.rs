@@ -82,24 +82,24 @@ impl Activation {
         let mut system = System::new_all();
         system.refresh_all();
 
-        hasher_fp.update(&system.get_physical_core_count().unwrap().to_be_bytes());
-        hasher_fp.update(system.get_name().unwrap().as_bytes());
-        hasher_fp.update(&system.get_total_memory().to_be_bytes());
+        hasher_fp.update(&system.physical_core_count().unwrap().to_be_bytes());
+        hasher_fp.update(system.name().unwrap().as_bytes());
+        hasher_fp.update(&system.total_memory().to_be_bytes());
 
         #[cfg(debug_assertions)]
         {
-            let cpu = system.get_physical_core_count().unwrap();
-            let os_ver = system.get_total_memory();
-            let os = system.get_name().unwrap();
+            let cpu = system.physical_core_count().unwrap();
+            let os_ver = system.total_memory();
+            let os = system.name().unwrap();
 
             println!("CPU count: {}\nRAM: {}\nOS: {}", &cpu, os_ver, os);
         }
 
         (
-            system.get_host_name().unwrap(),
+            system.host_name().unwrap(),
             hasher_fp.finalize().to_hex().to_string(),
             String::from(OS),
-            system.get_os_version().unwrap(),
+            system.os_version().unwrap(),
         )
     }
 

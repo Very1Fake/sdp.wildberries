@@ -11,7 +11,7 @@ use iced_native::{
     keyboard::{Event as KeyEvent, KeyCode},
     window::Event as WinEvent,
 };
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use serde_json::{from_reader, to_writer};
 use tokio::time::sleep;
 
@@ -20,6 +20,7 @@ use crate::{
         activation::{Activation, ActivationError},
         task::{Delivery, Task, TaskMsg, TaskProgress},
     },
+    settings::Settings,
     themes::Theme,
     views::{
         auth::{AuthViewState, Stage},
@@ -33,28 +34,6 @@ use crate::{
     },
     ACCOUNTS_FILE, LICENSE_FILE, PROXY_FILE, SETTINGS_FILE,
 };
-
-////////////////////////////////////////////////////////////////////////////////////////////////////
-// Settings
-////////////////////////////////////////////////////////////////////////////////////////////////////
-
-#[derive(Deserialize, Serialize, PartialEq)]
-#[serde(default)]
-struct Settings {
-    webhook: (u128, String),
-    proxy_mode: ProxyMode,
-    scale: f64,
-}
-
-impl Default for Settings {
-    fn default() -> Self {
-        Settings {
-            webhook: (0, String::new()),
-            proxy_mode: ProxyMode::default(),
-            scale: 1.0,
-        }
-    }
-}
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 // Message
@@ -94,8 +73,8 @@ pub enum Message {
 
     Event(Event),
     Theme(Theme),
-    Scale(f64),
     ProxyMode(ProxyMode),
+    Experimental(u8, bool),
     ResetAppearance,
 
     None,
@@ -107,15 +86,13 @@ pub enum Message {
 
 #[derive(Default)]
 pub struct Layout {
+    settings: Settings,
+
     explain: bool,
-    scale: f64,
     exit: bool,
-    proxy_mode: ProxyMode,
 
     accounts: Vec<Account>,
     proxies: Vec<Proxy>,
-    w_id: u128,
-    w_token: String,
 
     task_counter: u64,
     tasks: BTreeMap<u64, Task>,
@@ -174,11 +151,7 @@ impl Layout {
         }
 
         {
-            let content = Settings {
-                webhook: (self.w_id, self.w_token.clone()),
-                proxy_mode: self.proxy_mode.clone(),
-                scale: self.scale,
-            };
+            let content = self.settings.clone();
             let mut old = Settings::default();
             load_file(SETTINGS_FILE, &mut old);
 
@@ -209,22 +182,13 @@ impl Application for Layout {
         load_file(PROXY_FILE, &mut proxies);
         load_file(SETTINGS_FILE, &mut settings);
 
-        let Settings {
-            webhook: (w_id, w_token),
-            proxy_mode,
-            scale,
-        } = settings;
-
         let token = Activation::load_token(LICENSE_FILE);
 
         (
             Layout {
-                scale,
-                proxy_mode,
+                settings,
                 accounts,
                 proxies,
-                w_id,
-                w_token,
                 token: token.clone(),
                 tab: 1,
                 tabs: vec![
@@ -307,7 +271,7 @@ impl Application for Layout {
             Message::TabMsg(tab) => match tab {
                 TabMsg::SettingsMsg(msg) => {
                     if let Tab::Settings(ref mut state) = self.tabs[0].1 {
-                        state.update(msg, &mut self.w_id, &mut self.w_token)
+                        state.update(msg, &mut self.settings)
                     }
                 }
                 TabMsg::AddTasksMsg(msg) => {
@@ -385,7 +349,7 @@ impl Application for Layout {
                         }
                     })
                     .rev()
-                    .skip(if let ProxyMode::Strict = self.proxy_mode {
+                    .skip(if let ProxyMode::Strict = self.settings.proxy_mode {
                         account_count - proxy_count
                     } else {
                         0
@@ -395,7 +359,7 @@ impl Application for Layout {
                     let p = if proxy_count == 0 {
                         None
                     } else {
-                        match &self.proxy_mode {
+                        match &self.settings.proxy_mode {
                             ProxyMode::Off => None,
                             ProxyMode::Repeat => Some(proxies.next().unwrap().1),
                             ProxyMode::Moderate => {
@@ -426,8 +390,8 @@ impl Application for Layout {
                             delivery.clone(),
                             a.login.clone(),
                             a.password.clone(),
-                            self.w_id,
-                            self.w_token.clone(),
+                            self.settings.webhook.clone(),
+                            (self.settings.limiter, self.settings.checker),
                         ),
                     ) {
                         Some(_) => panic!(),
@@ -497,11 +461,15 @@ impl Application for Layout {
                 _ => (),
             },
             Message::Theme(theme) => self.theme = theme,
-            Message::Scale(scale) => self.scale = scale,
-            Message::ProxyMode(proxy_mode) => self.proxy_mode = proxy_mode,
+            Message::ProxyMode(proxy_mode) => self.settings.proxy_mode = proxy_mode,
+            Message::Experimental(flag, set) => match flag {
+                0 => self.settings.limiter = set,
+                1 => self.settings.checker = set,
+                _ => {}
+            },
             Message::ResetAppearance => {
-                self.theme = Theme::default();
-                self.scale = 1.0
+                self.settings.theme = Theme::default();
+                self.settings.scale = 1.0;
             }
             Message::None => (),
         }
@@ -522,12 +490,8 @@ impl Application for Layout {
             _ => match self.state {
                 ViewState::Auth(ref mut state) => state.view(&self.theme),
                 ViewState::Main(ref mut state) => state.view(
-                    &self.theme,
-                    self.scale,
-                    &self.proxy_mode,
+                    &mut self.settings,
                     self.activation.as_ref().unwrap(),
-                    self.w_id,
-                    &mut self.w_token,
                     &self.tab,
                     &mut self.tabs,
                     &mut self.accounts,
@@ -546,7 +510,7 @@ impl Application for Layout {
     }
 
     fn scale_factor(&self) -> f64 {
-        self.scale
+        self.settings.scale
     }
 
     fn should_exit(&self) -> bool {
