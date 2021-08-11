@@ -93,9 +93,9 @@ impl TabsViewState {
                                     .push(state.view(settings, &activation.key))
                                     .into(),
                                 Tab::Tasks(ref mut state) => state.view(&settings.theme, tasks),
-                                Tab::AddTasks(ref mut state) => {
-                                    content_scroll.push(state.view(&settings.theme)).into()
-                                }
+                                Tab::AddTasks(ref mut state) => content_scroll
+                                    .push(state.view(&settings.theme, &settings.webhook))
+                                    .into(),
                                 Tab::Accounts(ref mut state) => {
                                     state.view(&settings.theme, accounts)
                                 }

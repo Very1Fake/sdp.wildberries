@@ -51,6 +51,7 @@ fn main() -> Result {
             ..window::Settings::default()
         },
         antialiasing: true,
+        default_font: Some(include_bytes!("../assets/fonts/roboto.ttf")),
         exit_on_close_request: false,
         ..Default::default()
     })

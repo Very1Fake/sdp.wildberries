@@ -68,7 +68,7 @@ impl AuthViewState {
                         async move {
                             match Activation::activate(key).await {
                                 Ok((activation, token)) => {
-                                    Message::ActivationComplete { activation, token }
+                                    Message::Activation { activation, token }
                                 }
                                 Err(err) => Message::ViewMsg(ViewMsg::Auth(AuthMsg::Failed(err))),
                             }

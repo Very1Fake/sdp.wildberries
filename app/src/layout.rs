@@ -5,7 +5,9 @@ use std::{
     time::Duration,
 };
 
-use iced::{button, executor, Application, Clipboard, Command, Element, Subscription, Text};
+use iced::{
+    button, executor, time::every, Application, Clipboard, Command, Element, Subscription, Text,
+};
 use iced_native::{
     event::Event,
     keyboard::{Event as KeyEvent, KeyCode},
@@ -34,6 +36,7 @@ use crate::{
     },
     ACCOUNTS_FILE, LICENSE_FILE, PROXY_FILE, SETTINGS_FILE,
 };
+use iced_native::event::Status;
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 // Message
@@ -61,14 +64,15 @@ pub enum Message {
     },
     TaskProgressed((u64, TaskProgress)),
 
-    ActivationComplete {
+    Activation {
         activation: Activation,
         token: String,
     },
-    ActivationFailed {
+    ActivationError {
         err: ActivationError,
         key: String,
     },
+    ActivationCheck,
     Logout,
 
     Event(Event),
@@ -166,6 +170,22 @@ impl Layout {
 
         self.exit = true
     }
+
+    async fn activation_check(token: &String) -> Message {
+        match Activation::from_token(token) {
+            Some(saved) => {
+                let key = saved.key.clone();
+                match saved.verify().await {
+                    Ok((activation, token)) => Message::Activation { activation, token },
+                    Err(err) => Message::ActivationError { err, key },
+                }
+            }
+            None => {
+                sleep(Duration::from_secs(1)).await;
+                Message::View(View::Auth)
+            }
+        }
+    }
 }
 
 impl Application for Layout {
@@ -222,23 +242,7 @@ impl Application for Layout {
                 ..Default::default()
             },
             Command::perform(
-                async move {
-                    match Activation::from_token(&token) {
-                        Some(saved) => {
-                            let key = saved.key.clone();
-                            match saved.verify().await {
-                                Ok((activation, token)) => {
-                                    Message::ActivationComplete { activation, token }
-                                }
-                                Err(err) => Message::ActivationFailed { err, key },
-                            }
-                        }
-                        None => {
-                            sleep(Duration::from_secs(1)).await;
-                            Message::View(View::Auth)
-                        }
-                    }
-                },
+                async move { Layout::activation_check(&token).await },
                 |msg| msg,
             ),
         )
@@ -405,20 +409,28 @@ impl Application for Layout {
                 Some(task) => task.progress = state,
                 None => (),
             },
-            Message::ActivationComplete { activation, token } => {
+            Message::Activation { activation, token } => {
                 self.activation = Some(activation);
                 self.token = token;
 
                 self.view = View::Main;
                 self.state = View::Main.state();
             }
-            Message::ActivationFailed { err, key } => {
+            Message::ActivationError { err, key } => {
+                self.activation = None;
                 self.view = View::Auth;
                 self.state = ViewState::Auth(AuthViewState {
                     key,
                     stage: Stage::Failed(err),
                     ..Default::default()
                 });
+            }
+            Message::ActivationCheck => {
+                let token = self.token.clone();
+                result = Command::perform(
+                    async move { Layout::activation_check(&token).await },
+                    |msg| msg,
+                );
             }
             Message::Logout => {
                 self.token = String::new();
@@ -444,7 +456,7 @@ impl Application for Layout {
                 self.state = View::Splash.state();
             }
             Message::Event(event) => match event {
-                Event::Keyboard(key_event) => match key_event {
+                Event::Keyboard(event) => match event {
                     KeyEvent::KeyReleased {
                         key_code,
                         modifiers,
@@ -454,7 +466,7 @@ impl Application for Layout {
                     },
                     _ => (),
                 },
-                Event::Window(win_event) => match win_event {
+                Event::Window(event) => match event {
                     WinEvent::CloseRequested => self.graceful_exit(),
                     _ => (),
                 },
@@ -478,7 +490,26 @@ impl Application for Layout {
     }
 
     fn subscription(&self) -> Subscription<Self::Message> {
-        let mut subs = vec![iced_native::subscription::events().map(Message::Event)];
+        let mut subs = vec![iced_native::subscription::events_with(|e, s| match s {
+            Status::Ignored => match &e {
+                Event::Keyboard(event) => match event {
+                    KeyEvent::KeyReleased { .. } => Some(e),
+                    _ => None,
+                },
+                Event::Window(event) => match event {
+                    WinEvent::CloseRequested => Some(e),
+                    _ => None,
+                },
+                _ => None,
+            },
+            Status::Captured => None,
+        })
+        .map(Message::Event)];
+
+        if self.activation.is_some() {
+            subs.push(every(Duration::from_secs(1800)).map(|_i| Message::ActivationCheck));
+        }
+
         subs.extend(self.tasks.values().map(Task::subscription));
 
         Subscription::batch(subs)

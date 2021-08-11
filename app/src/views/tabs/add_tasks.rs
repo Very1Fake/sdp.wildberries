@@ -2,7 +2,7 @@ use std::fmt::{Display, Formatter};
 
 use iced::{
     button, pick_list, text_input, Align, Button, Color, Command, Container, Element, Length,
-    PickList, Row, Text, TextInput,
+    PickList, Row, Space, Text, TextInput,
 };
 use serde::Deserialize;
 use serde_json::from_str;
@@ -13,6 +13,7 @@ use crate::{
         misc::{request, BanKind, RespStatus},
         task::{Delivery, Task},
     },
+    settings::Webhook,
     themes::Theme,
 };
 
@@ -193,7 +194,7 @@ impl AddTasksTab {
         return Command::none();
     }
 
-    pub fn view(&mut self, theme: &Theme) -> Element<Message> {
+    pub fn view(&mut self, theme: &Theme, webhook: &Webhook) -> Element<Message> {
         let mut step_btn = Button::new(
             &mut self.step_btn,
             if self.sizes.is_empty() {
@@ -224,6 +225,18 @@ impl AddTasksTab {
                     })
                     .color(Color::from_rgb(1.0, 0.0, 0.0)),
             )
+            .push::<Element<Message>>(if webhook.id == 0 || webhook.token.is_empty() {
+                Container::new(
+                    Text::new("Discord webhook is empty")
+                        .size(32)
+                        .color(theme.color_danger()),
+                )
+                .width(Length::Fill)
+                .center_x()
+                .into()
+            } else {
+                Space::with_height(Length::Units(0)).into()
+            })
             .push(
                 Row::new()
                     .push(Text::new("Product ID").width(Length::FillPortion(1)))

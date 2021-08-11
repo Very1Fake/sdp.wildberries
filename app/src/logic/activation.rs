@@ -77,7 +77,7 @@ impl Activation {
         }
     }
 
-    pub fn get_identity() -> (String, String, String, String) {
+    pub fn identity() -> (String, String, String, String) {
         let mut hasher_fp = Hasher::new();
         let mut system = System::new_all();
         system.refresh_all();
@@ -85,15 +85,6 @@ impl Activation {
         hasher_fp.update(&system.physical_core_count().unwrap().to_be_bytes());
         hasher_fp.update(system.name().unwrap().as_bytes());
         hasher_fp.update(&system.total_memory().to_be_bytes());
-
-        #[cfg(debug_assertions)]
-        {
-            let cpu = system.physical_core_count().unwrap();
-            let os_ver = system.total_memory();
-            let os = system.name().unwrap();
-
-            println!("CPU count: {}\nRAM: {}\nOS: {}", &cpu, os_ver, os);
-        }
 
         (
             system.host_name().unwrap(),
@@ -142,7 +133,7 @@ impl Activation {
     }
 
     fn payload(key: String) -> ActivationPayload {
-        let (hostname, fingerprint, os, os_version) = Activation::get_identity();
+        let (hostname, fingerprint, os, os_version) = Activation::identity();
 
         ActivationPayload {
             os,
