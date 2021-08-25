@@ -1,11 +1,11 @@
 use std::collections::BTreeMap;
 
 use iced::{
-    button, scrollable, Column, Container, Element, HorizontalAlignment, Length, Row, Rule, Space,
-    Text,
+    button, scrollable, Button, Column, Container, Element, HorizontalAlignment, Length, Row, Rule,
+    Space, Text,
 };
 
-use accounts::Account;
+use accounts::{Account, AccountsMsg};
 use add_tasks::AddTasksMsg;
 use proxy::Proxy;
 use settings::SettingsMsg;
@@ -13,8 +13,7 @@ use settings::SettingsMsg;
 use crate::{
     icons::{icon, Icon},
     layout::Message,
-    logic::{activation::Activation, task::Task},
-    settings::Settings,
+    logic::{activation::Activation, models::Settings, task::Task},
     themes::Theme,
 };
 
@@ -54,14 +53,14 @@ impl TabsViewState {
         for (i, (_, t, b)) in tabs.iter_mut().enumerate() {
             if i == 0 {
                 pinned_button = Some(
-                    button::Button::new(b, icon(t.icon()).size(32).width(Length::Units(32)))
+                    Button::new(b, icon(t.icon()).size(32).width(Length::Units(32)))
                         .on_press(Message::Tab(0))
                         .padding(16)
                         .style(settings.theme.icon_button()),
                 );
             } else {
                 tab_bar = tab_bar.push(
-                    button::Button::new(b, icon(t.icon()).size(32).width(Length::Units(32)))
+                    Button::new(b, icon(t.icon()).size(32).width(Length::Units(32)))
                         .on_press(Message::Tab(i))
                         .padding(16)
                         .style(settings.theme.icon_button()),
@@ -153,6 +152,7 @@ impl Default for Tab {
 pub enum TabMsg {
     SettingsMsg(SettingsMsg),
     AddTasksMsg(AddTasksMsg),
+    AccountsMsg(AccountsMsg),
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////

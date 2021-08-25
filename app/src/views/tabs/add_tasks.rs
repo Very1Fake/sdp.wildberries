@@ -1,30 +1,30 @@
 use std::fmt::{Display, Formatter};
 
 use iced::{
-    button, pick_list, text_input, Align, Button, Color, Command, Container, Element, Length,
-    PickList, Row, Space, Text, TextInput,
+    button, pick_list, text_input, Button, Column, Command, Container, Element,
+    HorizontalAlignment, Length, PickList, Row, Space, Text, TextInput, VerticalAlignment,
 };
 use serde::Deserialize;
 use serde_json::from_str;
 
 use crate::{
+    icons::{icon, Icon},
     layout::Message,
     logic::{
-        misc::{request, BanKind, RespStatus},
-        task::{Delivery, Task},
+        misc::{client, request, BanKind, RequestMethod, ResponseStatus},
+        models::{ProductCard, ResponseResult, ResponseValue, SizeTag, Variant, Webhook},
     },
-    settings::Webhook,
     themes::Theme,
 };
 
-use super::{tab, TabMsg};
+use super::TabMsg;
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 // Size
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
 #[derive(Deserialize, Eq, PartialEq, Clone, Debug)]
-pub struct Size {
+pub struct SizeOld {
     is_last: bool,
     name: String,
     #[serde(rename = "product_option_value_id")]
@@ -35,7 +35,7 @@ pub struct Size {
     option: String,
 }
 
-impl Display for Size {
+impl Display for SizeOld {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
@@ -52,11 +52,10 @@ impl Display for Size {
 
 #[derive(Clone, Debug)]
 pub enum AddTasksMsg {
-    PIDChange(String),
-    SizeSelected(Size),
-    DeliverySelected(Delivery),
+    CodChange(String),
+    SizeSelected(SizeTag),
     Check,
-    Checked(Vec<Size>),
+    Checked(Option<(ProductCard, Variant)>),
     Create,
     Done(String),
     Reset,
@@ -73,14 +72,12 @@ pub struct AddTasksTab {
     processing: bool,
     error: String,
 
-    pid: String,
-    size: Option<Size>,
-    sizes: Vec<Size>,
-    delivery: Option<Delivery>,
+    cod: String,
+    product: Option<(ProductCard, Variant)>,
+    size: Option<SizeTag>,
 
-    pid_input: text_input::State,
-    size_pick: pick_list::State<Size>,
-    delivery_pick: pick_list::State<Delivery>,
+    cod_input: text_input::State,
+    size_pick: pick_list::State<SizeTag>,
     step_btn: button::State,
     reset_btn: button::State,
 }
@@ -88,98 +85,110 @@ pub struct AddTasksTab {
 impl AddTasksTab {
     fn reset(&mut self) {
         self.error = String::new();
+        self.product = None;
         self.size = None;
-        self.sizes = Vec::new();
-        self.delivery = None;
     }
 
     pub fn update(&mut self, msg: AddTasksMsg) -> Command<Message> {
         match msg {
-            AddTasksMsg::PIDChange(pid) if pid.parse::<u128>().is_ok() || pid.is_empty() => {
+            AddTasksMsg::CodChange(cod) if cod.parse::<u128>().is_ok() || cod.is_empty() => {
                 if self.size.is_some() {
                     self.size = None
                 }
-                if !self.sizes.is_empty() {
-                    self.sizes = Vec::new()
-                }
-                self.pid = pid
+                self.cod = cod
             }
-            AddTasksMsg::SizeSelected(size) => self.size = Some(size),
-            AddTasksMsg::DeliverySelected(delivery) => self.delivery = Some(delivery),
+            AddTasksMsg::SizeSelected(size) => {
+                if size.quantity != 0 {
+                    self.size = Some(size)
+                } else {
+                    self.error = String::from("This size cannot be selected (Sold Out)")
+                }
+            }
             AddTasksMsg::Create => {
-                let pid = self.pid.clone();
-                let Size {
-                    name,
-                    so,
-                    sv,
-                    option,
-                    ..
-                } = self.size.clone().unwrap();
-                let delivery = self.delivery.clone().unwrap();
+                let (card, variant) = self.product.clone().unwrap();
+                let size = if variant.sizes.len() > 1 {
+                    variant.sizes[&self.size.clone().unwrap().id.to_string()].clone()
+                } else {
+                    variant.sizes.values().next().cloned().unwrap()
+                };
 
                 self.reset();
 
                 return Command::perform(
-                    async move { (pid, name, so, sv, option, delivery) },
-                    |(pid, size_name, so, sv, option, delivery)| Message::AddTasks {
-                        pid,
-                        size_name,
-                        so,
-                        sv,
-                        option,
-                        delivery,
+                    async move { (card, variant, size) },
+                    |(card, variant, size)| Message::AddTasks {
+                        card,
+                        variant,
+                        size,
                     },
                 );
             }
             AddTasksMsg::Check => {
                 self.processing = true;
-                let pid = self.pid.clone();
+                self.error = String::new();
+                let cod = self.cod.clone();
 
                 return Command::perform(
                     async move {
                         match request(
-                            &mut Task::init_client(None),
-                            &format!("https://brandshop.ru/getproductsize/{}/", pid),
-                            None,
-                            "https://brandshop.ru/",
+                            &mut client(None, None),
+                            &format!(
+                                "https://www.wildberries.ru/{}/product/data?targetUrl=XS",
+                                cod
+                            ),
+                            RequestMethod::GET,
+                            &format!(
+                                "https://www.wildberries.ru/catalog/{}/detail.aspx?targetUrl=XS",
+                                cod
+                            ),
                             0,
                         )
                         .await
                         {
-                            Ok(resp) => {
-                                let sizes = from_str::<Vec<Size>>(&resp.body).unwrap();
-                                if sizes.is_empty() {
-                                    ("Product doesn't exists or sold out", Vec::new())
-                                } else {
-                                    ("", sizes)
+                            Ok(resp) => match from_str::<ResponseResult>(&resp.body) {
+                                Ok(result) => {
+                                    if let ResponseValue::Value(value) = result.value {
+                                        let variant = match value.data.variant {
+                                            Some(variant) => variant,
+                                            None => return ("Can't parse product variant", None),
+                                        };
+
+                                        match value.data.product_card {
+                                            Some(card) => ("", Some((card, variant))),
+                                            None => ("Can't parse product info", None),
+                                        }
+                                    } else {
+                                        ("Product scheme error", None)
+                                    }
                                 }
-                            }
+                                Err(_) => ("Product not found", None),
+                            },
                             Err(err) => {
                                 return (
                                     match err {
-                                        RespStatus::Timeout => "Timeout",
-                                        RespStatus::ConnectionError => "Connection Error",
-                                        RespStatus::ProtectionBan(kind) => match kind {
+                                        ResponseStatus::Timeout => "Timeout",
+                                        ResponseStatus::ConnectionError => "Connection Error",
+                                        ResponseStatus::ProtectionBan(kind) => match kind {
                                             BanKind::Variti => "Variti Ban",
                                             BanKind::DDOSGuard => "Protection Ban",
                                         },
                                     },
-                                    Vec::new(),
+                                    None,
                                 )
                             }
                         }
                     },
-                    move |(err, sizes)| {
+                    move |(err, result)| {
                         if err.is_empty() {
-                            AddTasksMsg::Checked(sizes).into()
+                            AddTasksMsg::Checked(result).into()
                         } else {
                             AddTasksMsg::Done(err.to_string()).into()
                         }
                     },
                 );
             }
-            AddTasksMsg::Checked(sizes) => {
-                self.sizes = sizes;
+            AddTasksMsg::Checked(result) => {
+                self.product = result;
                 self.error = String::new();
                 self.processing = false;
             }
@@ -191,112 +200,157 @@ impl AddTasksTab {
             _ => (),
         }
 
-        return Command::none();
+        Command::none()
     }
 
     pub fn view(&mut self, theme: &Theme, webhook: &Webhook) -> Element<Message> {
         let mut step_btn = Button::new(
             &mut self.step_btn,
-            if self.sizes.is_empty() {
-                Text::new("Check")
+            Text::new(if self.product.is_none() {
+                "Search"
             } else {
-                Text::new("Create")
-            },
+                "Run"
+            })
+            .width(Length::Fill)
+            .horizontal_alignment(HorizontalAlignment::Center),
         )
         .padding(8)
+        .width(Length::Units(128))
         .style(theme.primary_btn());
-        if !self.pid.is_empty() && !self.processing {
-            if self.sizes.is_empty() {
+
+        if !self.cod.is_empty() && !self.processing {
+            if self.product.is_none() {
                 step_btn = step_btn.on_press(AddTasksMsg::Check.into());
             } else {
-                if self.size.is_some() && self.delivery.is_some() {
-                    step_btn = step_btn.on_press(AddTasksMsg::Create.into());
+                match &self.product {
+                    Some((_, variant)) => {
+                        if variant.sizes.len() == 1 || self.size.is_some() {
+                            step_btn = step_btn.on_press(AddTasksMsg::Create.into());
+                        }
+                    }
+                    None => {}
                 }
             }
         }
 
-        let mut content = tab(&String::from("Create tasks"))
+        let cod_value = match &self.product {
+            Some((card, variant)) => match &variant.name {
+                Some(name) => format!("{} ({})", &card.name, name),
+                None => card.name.clone(),
+            },
+            None => self.cod.clone(),
+        };
+        let mut inner = Column::new()
+            .push(
+                Text::new("Create tasks")
+                    .size(32)
+                    .width(Length::Fill)
+                    .horizontal_alignment(HorizontalAlignment::Center),
+            )
+            .push(Space::with_height(Length::Units(24)))
             .push(
                 Text::new(&self.error)
-                    .height(if !self.error.is_empty() {
-                        Length::Shrink
-                    } else {
-                        Length::Units(0)
-                    })
-                    .color(Color::from_rgb(1.0, 0.0, 0.0)),
+                    .width(Length::Fill)
+                    .horizontal_alignment(HorizontalAlignment::Center)
+                    .color(theme.color_danger()),
             )
-            .push::<Element<Message>>(if webhook.id == 0 || webhook.token.is_empty() {
-                Container::new(
-                    Text::new("Discord webhook is empty")
-                        .size(32)
-                        .color(theme.color_danger()),
-                )
-                .width(Length::Fill)
-                .center_x()
-                .into()
+            .push(Space::with_height(Length::Units(
+                if self.error.is_empty() { 0 } else { 8 },
+            )))
+            .push(Text::new(if self.product.is_none() {
+                "PID"
             } else {
-                Space::with_height(Length::Units(0)).into()
-            })
+                "Product Name"
+            }))
+            .push(Space::with_height(Length::Units(8)))
             .push(
-                Row::new()
-                    .push(Text::new("Product ID").width(Length::FillPortion(1)))
-                    .push(
-                        TextInput::new(&mut self.pid_input, "PID", &self.pid, |pid| {
-                            AddTasksMsg::PIDChange(pid).into()
-                        })
-                        .width(Length::FillPortion(2))
-                        .padding(8)
-                        .style(theme.text_input()),
-                    )
-                    .align_items(Align::Center),
+                TextInput::new(
+                    &mut self.cod_input,
+                    "Enter product ID",
+                    &cod_value,
+                    if self.product.is_none() {
+                        |cod| AddTasksMsg::CodChange(cod).into()
+                    } else {
+                        |_| Message::None
+                    },
+                )
+                .width(Length::FillPortion(2))
+                .padding(8)
+                .style(theme.text_input()),
             );
 
-        if !self.sizes.is_empty() {
-            content = content
-                .push::<Element<Message>>(
-                    Row::new()
-                        .push(Text::new("Size").width(Length::FillPortion(1)))
+        match &self.product {
+            Some((_, variant)) => {
+                if variant.sizes.len() > 1 {
+                    inner = inner
+                        .push(Space::with_height(Length::Units(16)))
+                        .push(Text::new("Size"))
+                        .push(Space::with_height(Length::Units(8)))
                         .push(
                             PickList::new(
                                 &mut self.size_pick,
-                                self.sizes.clone(),
+                                variant.sizes_tags(),
                                 self.size.clone(),
-                                |size| AddTasksMsg::SizeSelected(size).into(),
+                                |variant| AddTasksMsg::SizeSelected(variant).into(),
                             )
-                            .width(Length::FillPortion(2)),
+                            .width(Length::Fill),
                         )
-                        .align_items(Align::Center)
-                        .into(),
+                }
+            }
+            None => (),
+        }
+
+        let mut content = Column::new();
+
+        if webhook.id == 0 || webhook.token.is_empty() {
+            content = content
+                .push(
+                    Container::new(
+                        Row::new()
+                            .push(icon(Icon::Alert).size(48).width(Length::Units(48)))
+                            .push(Space::with_width(Length::Units(32)))
+                            .push(
+                                Text::new("Discord webhook is not configured!")
+                                    .size(32)
+                                    .height(Length::Units(48))
+                                    .vertical_alignment(VerticalAlignment::Center),
+                            ),
+                    )
+                    .padding(16)
+                    .width(Length::Fill)
+                    .style(theme.alert_box()),
                 )
-                .push::<Element<Message>>(
-                    Row::new()
-                        .push(Text::new("Delivery").width(Length::FillPortion(1)))
-                        .push(
-                            PickList::new(
-                                &mut self.delivery_pick,
-                                &Delivery::ALL[..],
-                                self.delivery.clone(),
-                                |delivery| AddTasksMsg::DeliverySelected(delivery).into(),
-                            )
-                            .width(Length::FillPortion(2)),
-                        )
-                        .align_items(Align::Center)
-                        .into(),
-                )
+                .push(Space::with_height(Length::Units(32)));
         }
 
         content
-            .push(Container::new(step_btn).width(Length::Fill).center_x())
             .push(
                 Container::new(
-                    Button::new(&mut self.reset_btn, Text::new("Reset"))
-                        .on_press(AddTasksMsg::Reset.into())
-                        .padding(8)
-                        .style(theme.primary_btn()),
+                    inner
+                        .push(Space::with_height(Length::Units(16)))
+                        .push(Container::new(step_btn).width(Length::Fill).center_x())
+                        .push(Space::with_height(Length::Units(24)))
+                        .push(
+                            Container::new(
+                                Button::new(
+                                    &mut self.reset_btn,
+                                    Text::new("Reset")
+                                        .width(Length::Fill)
+                                        .horizontal_alignment(HorizontalAlignment::Center),
+                                )
+                                .on_press(AddTasksMsg::Reset.into())
+                                .padding(8)
+                                .width(Length::Units(128))
+                                .style(theme.danger_btn()),
+                            )
+                            .width(Length::Fill)
+                            .center_x(),
+                        ),
                 )
-                .width(Length::Fill)
-                .center_x(),
+                .padding(32)
+                .style(theme.card()),
             )
+            .padding(32)
             .into()
     }
 }

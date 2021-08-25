@@ -3,7 +3,7 @@ use iced::{
     PickList, Row, Text, TextInput,
 };
 
-use crate::{layout::Message, settings::Settings, themes::Theme, VERSION};
+use crate::{layout::Message, logic::models::Settings, themes::Theme, VERSION};
 
 use super::{proxy::ProxyMode, section, tab, TabMsg};
 
@@ -188,9 +188,9 @@ impl SettingsTab {
                     )
                     .push(
                         Row::new()
-                            .push(Text::new("Checker").width(Length::FillPortion(1)))
+                            .push(Text::new("Force checkout").width(Length::FillPortion(1)))
                             .push(
-                                Container::new(Checkbox::new(settings.checker, "", |is| {
+                                Container::new(Checkbox::new(settings.force, "", |is| {
                                     Message::Experimental(1, is)
                                 }))
                                 .width(Length::FillPortion(2))
@@ -211,6 +211,12 @@ impl SettingsTab {
                         Row::new()
                             .push(Text::new("Version").width(Length::FillPortion(1)))
                             .push(Text::new(VERSION).width(Length::FillPortion(2)))
+                            .align_items(Align::Center),
+                    )
+                    .push(
+                        Row::new()
+                            .push(Text::new("Edition").width(Length::FillPortion(1)))
+                            .push(Text::new("WILDBERRIES").width(Length::FillPortion(2)))
                             .align_items(Align::Center),
                     )
                     .push(

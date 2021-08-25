@@ -20,15 +20,15 @@ use tokio::time::sleep;
 use crate::{
     logic::{
         activation::{Activation, ActivationError},
-        task::{Delivery, Task, TaskMsg, TaskProgress},
+        models::{ProductCard, Settings, Size, Variant},
+        task::{Task, TaskMsg, TaskProgress},
     },
-    settings::Settings,
     themes::Theme,
     views::{
         auth::{AuthViewState, Stage},
         splash,
         tabs::{
-            accounts::{Account, AccountMsg, AccountState},
+            accounts::Account,
             proxy::{Proxy, ProxyMode, ProxyMsg, ProxyState},
             Tab, TabMsg,
         },
@@ -49,18 +49,13 @@ pub enum Message {
     Tab(usize),
     TabMsg(TabMsg),
 
-    Account(usize, AccountMsg),
-    NewAccount,
     Proxy(usize, ProxyMsg),
     NewProxy,
     Task(u64, TaskMsg),
     AddTasks {
-        pid: String,
-        size_name: String,
-        so: String,
-        sv: String,
-        option: String,
-        delivery: Delivery,
+        card: ProductCard,
+        variant: Variant,
+        size: Size,
     },
     TaskProgressed((u64, TaskProgress)),
 
@@ -115,23 +110,17 @@ pub struct Layout {
 impl Layout {
     fn graceful_exit(&mut self) {
         {
-            let content = self
-                .accounts
-                .iter()
-                .filter(|account| {
-                    if let AccountState::View { .. } = account.state {
-                        true
-                    } else {
-                        false
-                    }
-                })
-                .collect::<Vec<&Account>>();
             let mut old: Vec<Account> = Vec::new();
             load_file(ACCOUNTS_FILE, &mut old);
 
-            if content != Vec::<&Account>::new() && content != old.iter().collect::<Vec<&Account>>()
+            if (&self.accounts != &Vec::<Account>::new() || &old != &Vec::<Account>::new())
+                && &self.accounts != &old
             {
-                to_writer(File::create(Path::new(ACCOUNTS_FILE)).unwrap(), &content).unwrap();
+                to_writer(
+                    File::create(Path::new(ACCOUNTS_FILE)).unwrap(),
+                    &self.accounts,
+                )
+                .unwrap();
             }
         }
         {
@@ -149,7 +138,10 @@ impl Layout {
             let mut old: Vec<Proxy> = Vec::new();
             load_file(PROXY_FILE, &mut old);
 
-            if content != Vec::<&Proxy>::new() && content != old.iter().collect::<Vec<&Proxy>>() {
+            if (content != Vec::<&Proxy>::new()
+                || old.iter().collect::<Vec<&Proxy>>() != Vec::<&Proxy>::new())
+                && content != old.iter().collect::<Vec<&Proxy>>()
+            {
                 to_writer(File::create(Path::new(PROXY_FILE)).unwrap(), &content).unwrap();
             }
         }
@@ -257,8 +249,6 @@ impl Application for Layout {
         message: Self::Message,
         _clipboard: &mut Clipboard,
     ) -> Command<Self::Message> {
-        let mut result = Command::none();
-
         match message {
             Message::View(view) => {
                 self.state = view.state();
@@ -267,7 +257,7 @@ impl Application for Layout {
             Message::ViewMsg(view_msg) => match view_msg {
                 ViewMsg::Auth(msg) => {
                     if let ViewState::Auth(ref mut state) = self.state {
-                        result = state.update(msg)
+                        return state.update(msg);
                     }
                 }
             },
@@ -280,15 +270,15 @@ impl Application for Layout {
                 }
                 TabMsg::AddTasksMsg(msg) => {
                     if let Tab::AddTasks(ref mut state) = self.tabs[3].1 {
-                        result = state.update(msg)
+                        return state.update(msg);
+                    }
+                }
+                TabMsg::AccountsMsg(msg) => {
+                    if let Tab::Accounts(ref mut state) = self.tabs[4].1 {
+                        return state.update(msg, &mut self.accounts);
                     }
                 }
             },
-            Message::Account(id, AccountMsg::Delete) => {
-                self.accounts.remove(id);
-            }
-            Message::Account(id, msg) => self.accounts[id].update(msg),
-            Message::NewAccount => self.accounts.push(Account::new()),
             Message::Proxy(id, ProxyMsg::Delete) => {
                 self.proxies.remove(id);
             }
@@ -299,12 +289,9 @@ impl Application for Layout {
             }
             Message::Task(id, msg) => self.tasks.get_mut(&id).unwrap().update(msg),
             Message::AddTasks {
-                pid,
-                size_name,
-                so,
-                sv,
-                option,
-                delivery,
+                card,
+                variant,
+                size,
             } => {
                 let mut proxies = self
                     .proxies
@@ -330,34 +317,15 @@ impl Application for Layout {
                         }
                     })
                     .count();
-                let account_count = self
-                    .accounts
-                    .iter()
-                    .filter(|a| {
-                        if let AccountState::View { .. } = a.state {
-                            a.active
-                        } else {
-                            false
-                        }
-                    })
-                    .count();
+                let account_count = self.accounts.iter().filter(|a| a.active).count();
 
-                let iterator = self
-                    .accounts
-                    .iter()
-                    .filter(|a| {
-                        if let AccountState::View { .. } = a.state {
-                            a.active
-                        } else {
-                            false
-                        }
-                    })
-                    .rev()
-                    .skip(if let ProxyMode::Strict = self.settings.proxy_mode {
+                let iterator = self.accounts.iter().filter(|a| a.active).rev().skip(
+                    if let ProxyMode::Strict = self.settings.proxy_mode {
                         account_count - proxy_count
                     } else {
                         0
-                    });
+                    },
+                );
 
                 for a in iterator {
                     let p = if proxy_count == 0 {
@@ -386,16 +354,12 @@ impl Application for Layout {
                         Task::new(
                             self.task_counter,
                             p,
-                            pid.clone(),
-                            size_name.clone(),
-                            so.clone(),
-                            sv.clone(),
-                            option.clone(),
-                            delivery.clone(),
-                            a.login.clone(),
-                            a.password.clone(),
+                            card.clone(),
+                            variant.clone(),
+                            size.clone(),
+                            (a.phone.clone(), a.token.clone()),
                             self.settings.webhook.clone(),
-                            (self.settings.limiter, self.settings.checker),
+                            (self.settings.limiter, self.settings.force),
                         ),
                     ) {
                         Some(_) => panic!(),
@@ -427,7 +391,7 @@ impl Application for Layout {
             }
             Message::ActivationCheck => {
                 let token = self.token.clone();
-                result = Command::perform(
+                return Command::perform(
                     async move { Layout::activation_check(&token).await },
                     |msg| msg,
                 );
@@ -436,7 +400,7 @@ impl Application for Layout {
                 self.token = String::new();
                 match self.activation.take() {
                     Some(activation) => {
-                        result = Command::perform(
+                        return Command::perform(
                             async move {
                                 activation.deactivate().await;
                                 View::Auth
@@ -476,7 +440,7 @@ impl Application for Layout {
             Message::ProxyMode(proxy_mode) => self.settings.proxy_mode = proxy_mode,
             Message::Experimental(flag, set) => match flag {
                 0 => self.settings.limiter = set,
-                1 => self.settings.checker = set,
+                1 => self.settings.force = set,
                 _ => {}
             },
             Message::ResetAppearance => {
@@ -486,7 +450,7 @@ impl Application for Layout {
             Message::None => (),
         }
 
-        result
+        return Command::none();
     }
 
     fn subscription(&self) -> Subscription<Self::Message> {

@@ -19,6 +19,7 @@ pub enum Icon {
     ArrowUp,
     Reload,
     Server,
+    Alert,
 }
 
 impl Icon {
@@ -37,6 +38,7 @@ impl Icon {
             Icon::ArrowUp => "\u{010A}",
             Icon::Reload => "\u{010B}",
             Icon::Server => "\u{010C}",
+            Icon::Alert => "\u{010D}",
         }
     }
 }

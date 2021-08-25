@@ -1,6 +1,6 @@
 [package]
 name = "app"
-version = "0.0.20"
+version = "0.0.24"
 authors = ["very1fake <very1fake.coder@gmail.com>"]
 edition = "2018"
 
@@ -12,7 +12,7 @@ chrono = "0.4"
 iced = { version = "0.3", default-features = false, features = ["tokio", "wgpu"] }
 iced_futures = "0.3"
 iced_native = "0.4"
-tokio = { version = "1.9", features = ["time"] }
+tokio = { version = "1.10", features = ["time"] }
 serde = { version = "1.0", default-features = false, features = ["derive"] }
 serde_json = { version = "1.0", default-features = false }
 serde_repr = "0.1"
@@ -21,6 +21,3 @@ sysinfo = "0.20"
 jsonwebtoken = "7.2"
 toml = "0.5"
 rand = "0.8"
-
-rustls = "0.19"
-webpki-roots = "0.21"

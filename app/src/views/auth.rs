@@ -80,7 +80,7 @@ impl AuthViewState {
             }
         }
 
-        return Command::none();
+        Command::none()
     }
 
     pub fn view(&mut self, theme: &Theme) -> Element<Message> {

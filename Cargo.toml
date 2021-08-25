@@ -5,7 +5,8 @@ members = [
 ]
 
 [profile.dev]
-debug = false
+opt-level = "s"
+debug = 0
 
 [profile.release]
 lto = "fat"

@@ -94,9 +94,25 @@ impl Theme {
         }
     }
 
+    pub fn task_divider(&self) -> Box<dyn rule::StyleSheet> {
+        match *self {
+            Theme::Light => light::TaskDivider.into(),
+        }
+    }
+
+    ////////////////////////////////////////////////////////////////////////////////////////////////
+    // Containers
+    ////////////////////////////////////////////////////////////////////////////////////////////////
+
     pub fn card(&self) -> Box<dyn container::StyleSheet> {
         match *self {
             Theme::Light => light::Card.into(),
+        }
+    }
+
+    pub fn alert_box(&self) -> Box<dyn container::StyleSheet> {
+        match *self {
+            Theme::Light => light::AlertBox.into(),
         }
     }
 
@@ -107,6 +123,12 @@ impl Theme {
     pub fn section_divider_spacing(&self) -> u16 {
         match *self {
             Theme::Light => light::SECTION_DIVIDER_SPACING,
+        }
+    }
+
+    pub fn task_divider_spacing(&self) -> u16 {
+        match *self {
+            Theme::Light => light::TASK_DIVIDER_SPACING,
         }
     }
 }

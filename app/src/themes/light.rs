@@ -37,6 +37,7 @@ pub const COLOR_SELECTION: Color = Color::from_rgba(0.675, 0.808, 0.969, 1.0); /
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
 pub const SECTION_DIVIDER_SPACING: u16 = 7;
+pub const TASK_DIVIDER_SPACING: u16 = 5;
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 // Button Primary
@@ -48,7 +49,7 @@ impl button::StyleSheet for PrimaryButton {
     fn active(&self) -> button::Style {
         button::Style {
             background: Some(Background::Color(COLOR_PRIMARY)),
-            border_radius: 6.0,
+            border_radius: 8.0,
             border_width: 1.0,
             border_color: Color::TRANSPARENT,
             text_color: COLOR_TEXT,
@@ -91,7 +92,7 @@ impl button::StyleSheet for DangerButton {
     fn active(&self) -> button::Style {
         button::Style {
             background: Some(Background::Color(COLOR_DANGER)),
-            border_radius: 6.0,
+            border_radius: 8.0,
             border_width: 1.0,
             border_color: Color::TRANSPARENT,
             text_color: COLOR_TEXT,
@@ -134,7 +135,7 @@ impl button::StyleSheet for SuccessButton {
     fn active(&self) -> button::Style {
         button::Style {
             background: Some(Background::Color(COLOR_SUCCESS)),
-            border_radius: 6.0,
+            border_radius: 8.0,
             border_width: 1.0,
             border_color: Color::TRANSPARENT,
             text_color: COLOR_TEXT,
@@ -285,6 +286,23 @@ impl rule::StyleSheet for SectionDivider {
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
+// Task divider
+////////////////////////////////////////////////////////////////////////////////////////////////////
+
+pub struct TaskDivider;
+
+impl rule::StyleSheet for TaskDivider {
+    fn style(&self) -> rule::Style {
+        rule::Style {
+            color: COLOR_GREY_INACTIVE,
+            width: 1,
+            radius: 0.0,
+            fill_mode: rule::FillMode::Padded(8),
+        }
+    }
+}
+
+////////////////////////////////////////////////////////////////////////////////////////////////////
 // Card
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
@@ -293,9 +311,27 @@ pub struct Card;
 impl container::StyleSheet for Card {
     fn style(&self) -> container::Style {
         container::Style {
-            border_radius: 5.0,
+            border_radius: 8.0,
             border_width: 0.4,
             border_color: [0.7, 0.75, 0.7, 1.0].into(),
+            ..Default::default()
+        }
+    }
+}
+
+////////////////////////////////////////////////////////////////////////////////////////////////////
+// Alert Box
+////////////////////////////////////////////////////////////////////////////////////////////////////
+
+pub struct AlertBox;
+
+impl container::StyleSheet for AlertBox {
+    fn style(&self) -> container::Style {
+        container::Style {
+            border_radius: 8.0,
+            border_width: 2.0,
+            border_color: COLOR_DANGER_DARK,
+            text_color: Some(COLOR_DANGER),
             ..Default::default()
         }
     }
