@@ -9,10 +9,11 @@ use super::{proxy::ProxyMode, section, tab, TabMsg};
 
 #[derive(Clone, Debug)]
 pub enum SettingsMsg {
-    IdChanged(String),
+    IdChanged(u64),
     TokenChanged(String),
     ScaleChange(f64),
     ScaleApply,
+    None,
 }
 
 impl Into<Message> for SettingsMsg {
@@ -33,6 +34,8 @@ pub struct SettingsTab {
     pub scale_apply: button::State,
     pub scale: f64,
 
+    pub monitor_freq_input: text_input::State,
+
     pub reset_btn: button::State,
     pub logout_btn: button::State,
 }
@@ -40,10 +43,7 @@ pub struct SettingsTab {
 impl SettingsTab {
     pub fn update(&mut self, msg: SettingsMsg, settings: &mut Settings) {
         match msg {
-            SettingsMsg::IdChanged(id) => match id.parse::<u64>() {
-                Ok(id) => settings.webhook.id = id,
-                Err(_) => (),
-            },
+            SettingsMsg::IdChanged(id) => settings.webhook.id = id,
             SettingsMsg::TokenChanged(token) => {
                 settings.webhook.token = if token.len() > 68 {
                     token[0..=67].to_string()
@@ -53,6 +53,7 @@ impl SettingsTab {
             }
             SettingsMsg::ScaleChange(scale) => self.scale = scale,
             SettingsMsg::ScaleApply => settings.scale = self.scale,
+            SettingsMsg::None => (),
         }
     }
 
@@ -78,7 +79,13 @@ impl SettingsTab {
                                     &mut self.id_input,
                                     "",
                                     &settings.webhook.id.to_string(),
-                                    |id| SettingsMsg::IdChanged(id).into(),
+                                    |id| {
+                                        match id.parse::<u64>() {
+                                            Ok(id) => SettingsMsg::IdChanged(id),
+                                            Err(_) => SettingsMsg::None,
+                                        }
+                                        .into()
+                                    },
                                 )
                                 .width(Length::FillPortion(2))
                                 .padding(8)
@@ -179,7 +186,7 @@ impl SettingsTab {
                             .push(Text::new("Limiter").width(Length::FillPortion(1)))
                             .push(
                                 Container::new(Checkbox::new(settings.limiter, "", |is| {
-                                    Message::Experimental(0, is)
+                                    Message::ExperimentalBool(0, is)
                                 }))
                                 .width(Length::FillPortion(2))
                                 .center_x(),
@@ -191,10 +198,44 @@ impl SettingsTab {
                             .push(Text::new("Force checkout").width(Length::FillPortion(1)))
                             .push(
                                 Container::new(Checkbox::new(settings.force, "", |is| {
-                                    Message::Experimental(1, is)
+                                    Message::ExperimentalBool(1, is)
                                 }))
                                 .width(Length::FillPortion(2))
                                 .center_x(),
+                            )
+                            .align_items(Align::Center),
+                    )
+                    .push(
+                        Row::new()
+                            .push(Text::new("Monitor").width(Length::FillPortion(1)))
+                            .push(
+                                Container::new(Checkbox::new(settings.monitor, "", |is| {
+                                    Message::ExperimentalBool(2, is)
+                                }))
+                                .width(Length::FillPortion(2))
+                                .center_x(),
+                            )
+                            .align_items(Align::Center),
+                    )
+                    .push(
+                        Row::new()
+                            .push(
+                                Text::new("Monitoring frequency (ms)")
+                                    .width(Length::FillPortion(1)),
+                            )
+                            .push(
+                                TextInput::new(
+                                    &mut self.monitor_freq_input,
+                                    "Frequency in milliseconds",
+                                    &settings.monitor_freq.to_string(),
+                                    |ms| match ms.parse::<u64>() {
+                                        Ok(freq) => Message::ExperimentalNumber(3, freq),
+                                        Err(_) => Message::None,
+                                    },
+                                )
+                                .padding(8)
+                                .width(Length::FillPortion(2))
+                                .style(settings.theme.text_input()),
                             )
                             .align_items(Align::Center),
                     ),

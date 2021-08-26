@@ -26,6 +26,8 @@ pub struct Settings {
     // Experimental flags
     pub limiter: bool,
     pub force: bool,
+    pub monitor: bool,
+    pub monitor_freq: u64,
 }
 
 impl Default for Settings {
@@ -37,8 +39,10 @@ impl Default for Settings {
             theme: Theme::Light,
             scale: 1.0,
 
-            limiter: true,
+            limiter: false,
             force: false,
+            monitor: true,
+            monitor_freq: 1500,
         }
     }
 }

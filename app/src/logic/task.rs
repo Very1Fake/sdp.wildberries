@@ -2,7 +2,7 @@ use std::{
     fmt::Display,
     hash::{Hash, Hasher},
     sync::Arc,
-    time::{SystemTime, UNIX_EPOCH},
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 use chrono::{offset::TimeZone, Local, NaiveDate, NaiveDateTime, Utc};
@@ -13,6 +13,7 @@ use iced_futures::futures::stream;
 use iced_native::subscription::Recipe;
 use reqwest::{Client, StatusCode};
 use serde_json::{from_str, json};
+use tokio::time::sleep;
 
 use crate::{
     icons::{icon, Icon},
@@ -44,7 +45,7 @@ pub struct Task {
 
     pub account: (String, String),
     pub webhook: Webhook,
-    pub flags: (bool, bool),
+    pub flags: (bool, bool, bool, u64),
 
     pub progress: TaskProgress,
 
@@ -61,7 +62,7 @@ impl Task {
         size: Size,
         account: (String, String),
         webhook: Webhook,
-        flags: (bool, bool),
+        flags: (bool, bool, bool, u64),
     ) -> Task {
         Task {
             uid,
@@ -213,6 +214,7 @@ impl Task {
         match self.progress {
             TaskProgress::Start
             | TaskProgress::WarmingUp
+            | TaskProgress::Waiting(_)
             | TaskProgress::Processing
             | TaskProgress::Completing(_) => Subscription::from_recipe(Background {
                 uid: self.uid,
@@ -280,6 +282,7 @@ impl Default for TaskState {
 pub enum TaskProgress {
     Start,
     WarmingUp,
+    Waiting(Option<String>),
     Processing,
     Completing(Option<String>),
 
@@ -293,6 +296,10 @@ impl TaskProgress {
         match self {
             TaskProgress::Start => String::from("Starting"),
             TaskProgress::WarmingUp => String::from("Warming Up"),
+            TaskProgress::Waiting(msg) => match msg {
+                Some(ref text) => format!("Waiting: {}", text.clone()),
+                None => String::from("Waiting"),
+            },
             TaskProgress::Processing => String::from("Processing"),
             TaskProgress::Completing(msg) => match msg {
                 Some(ref text) => format!("Completing: {}", text.clone()),
@@ -320,8 +327,8 @@ impl TaskProgress {
         match *self {
             TaskProgress::Start => Color::BLACK,
             TaskProgress::WarmingUp => Color::from_rgb(1.0, 0.671, 0.0),
+            TaskProgress::Waiting(_) => Color::from_rgb(0.188, 0.31, 0.996),
             TaskProgress::Processing => Color::from_rgb(0.867, 0.173, 0.0),
-            // TaskProgress::PostSuccess(_) => Color::from_rgb(0.188, 0.31, 0.996),
             TaskProgress::Completing(_) => Color::from_rgb(0.0, 0.784, 0.325),
             TaskProgress::Complete(_) => Color::from_rgb(0.392, 0.867, 0.09),
             TaskProgress::Failed(_) | TaskProgress::Error(_) => Color::from_rgb(0.835, 0.0, 0.0),
@@ -495,18 +502,15 @@ where
                                                                     Ok(result) => if result.state == -1 {
                                                                         action =
                                                                             LoopAction::Error(
-                                                                                String::from("Can't remove other items from cart"),
-
+                                                                                String::from("Can't remove other items from cart")
                                                                             )
                                                                     }
                                                                     Err(_) => action = LoopAction::Error(
-                                                                        TaskError::Response.to_string("D"),
-
+                                                                        TaskError::Response.to_string("D")
                                                                     ),
                                                                 },
                                                                 Err(err) => action = LoopAction::Error(
-                                                                    err.to_string("D"),
-
+                                                                    err.to_string("D")
                                                                 )
                                                             }
                                                             }
@@ -535,10 +539,8 @@ where
                                         LoopAction::Error(_) if !state.flags.1 => {}
                                         LoopAction::Continue | LoopAction::Error(_) => {
                                             action = LoopAction::Move(
-                                                BackgroundStep::Process {
-                                                    cart: Basket::default(),
-                                                },
-                                                None,
+                                                BackgroundStep::Waiting,
+                                                Some(String::from("Scanning")),
                                             )
                                         }
                                         _ => {}
@@ -549,7 +551,7 @@ where
                         }
                         _ => {}
                     },
-                    BackgroundStep::Process { ref mut cart } => {
+                    BackgroundStep::Waiting => {
                         match state.substep {
                             // Check product availability (E)
                             0 => match request(
@@ -560,16 +562,16 @@ where
                                 ),
                                 RequestMethod::GET,
                                 &format!(
-                                "https://www.wildberries.ru/catalog/{}/detail.aspx?targetUrl=XS",
-                                state.variant.id
-                            ),
+                                    "https://www.wildberries.ru/catalog/{}/detail.aspx?targetUrl=XS",
+                                    state.variant.id
+                                ),
                                 if state.flags.0 {
                                     rand_millis(25..=30)
                                 } else {
                                     0
                                 },
                             )
-                            .await
+                                .await
                             {
                                 Ok(resp) => {
                                     if resp.status == StatusCode::NOT_FOUND {
@@ -581,29 +583,36 @@ where
                                                 if let ResponseValue::Value(value) = result.value {
                                                     match value.data.variant {
                                                         Some(variant) => {
-                                                            if variant.sold_out {
-                                                                action = LoopAction::Error(
-                                                                    String::from(
-                                                                        "Product already sold out",
-                                                                    ),
-                                                                );
-                                                            } else {
-                                                                match variant
+                                                            match variant
                                                                 .sizes
                                                                 .get(&state.size.id.to_string())
                                                             {
                                                                 Some(size) => {
                                                                     if size.sold_out {
-                                                                        action = LoopAction::Error(String::from("Product size already sold out"), );
+                                                                        if state.flags.2 {
+                                                                            action = LoopAction::Break(None);
+                                                                            state.substep = 1;
+                                                                        } else {
+                                                                            action = LoopAction::Error(
+                                                                                String::from(
+                                                                                    "Size is sold out",
+                                                                                ),
+                                                                            );
+                                                                        }
+                                                                    } else {
+                                                                        action = LoopAction::Move(
+                                                                            BackgroundStep::Process {
+                                                                                cart: Basket::default(),
+                                                                            },
+                                                                            None,
+                                                                        );
                                                                     }
                                                                 }
                                                                 None => action = LoopAction::Error(
                                                                     String::from(
-                                                                        "Product size not found",
-                                                                    ),
-
+                                                                        "Size not found",
+                                                                    )
                                                                 ),
-                                                            }
                                                             }
                                                         }
                                                         None => {
@@ -629,8 +638,18 @@ where
                                 }
                                 Err(err) => action = LoopAction::Error(err.to_string("E")),
                             },
+                            1 => {
+                                sleep(Duration::from_millis(state.flags.3)).await;
+                                action = LoopAction::Break(Some(String::from("Scanning")));
+                                state.substep = 0;
+                            }
+                            _ => {}
+                        }
+                    }
+                    BackgroundStep::Process { ref mut cart } => {
+                        match state.substep {
                             // Add product to cart (F)
-                            1 => match request(
+                            0 => match request(
                                 &mut state.client,
                                 "https://www.wildberries.ru/product/addtobasket",
                                 RequestMethod::POST(Some(&vec![
@@ -653,9 +672,9 @@ where
                                 Ok(resp) => match from_str::<ResponseResult>(&resp.body) {
                                     Ok(result) => {
                                         if result.state == -1 {
-                                            action = LoopAction::Error(String::from(
-                                                "Something went wrong (F)",
-                                            ));
+                                            action = LoopAction::Error(
+                                                TaskError::Unknown.to_string("F"),
+                                            );
                                         } else {
                                             if let ResponseValue::Basket(data) = result.value {
                                                 match data.basket_info {
@@ -670,10 +689,7 @@ where
                                                             1 => {}
                                                             _ => {
                                                                 if !state.flags.1 {
-                                                                    action = LoopAction::Error(
-                                                            String::from("Cart corrupted. Check it by yourself"),
-
-                                                        )
+                                                                    action = LoopAction::Error(String::from("Cart corrupted. Check it by yourself"))
                                                                 }
                                                             }
                                                         }
@@ -699,7 +715,7 @@ where
                                 Err(err) => action = LoopAction::Error(err.to_string("F")),
                             },
                             // Collect final cart data (G)
-                            2 => match request(
+                            1 => match request(
                                 &mut state.client,
                                 "https://www.wildberries.ru/lk/basket/data",
                                 RequestMethod::GET,
@@ -743,7 +759,7 @@ where
                                 Err(err) => action = LoopAction::Error(err.to_string("G")),
                             },
                             // Submit order (H)
-                            3 => {
+                            2 => {
                                 let mut form = vec![
                                     (
                                         String::from("orderDetails.DeliveryPointId"),
@@ -837,7 +853,6 @@ where
                                             } else {
                                                 if let ResponseValue::Order { url } = result.value {
                                                     if url.ends_with("payment/fail") {
-                                                        action = LoopAction::Jump(4)
                                                     } else if url
                                                         .starts_with("https://beta.paywb.com")
                                                     {
@@ -900,7 +915,7 @@ where
                                 }
                             }
                             // Parse payment error (I)
-                            4 => match request(
+                            3 => match request(
                                 &mut state.client,
                                 "https://www.wildberries.ru/lk/payment/fail",
                                 RequestMethod::GET,
@@ -1156,11 +1171,21 @@ where
                 }
                 match action {
                     LoopAction::Continue => state.substep += 1,
-                    LoopAction::Jump(substep) => state.substep = substep,
+                    LoopAction::Break(ref msg) => {
+                        let cloned = msg.clone();
+
+                        match state.progress {
+                            TaskProgress::Waiting(_) => {
+                                state.progress = TaskProgress::Waiting(cloned)
+                            }
+                            _ => {}
+                        }
+                    }
                     LoopAction::Move(ref step, ref msg) => {
                         state.progress = match step {
                             BackgroundStep::Start => TaskProgress::Start,
                             BackgroundStep::Warmup => TaskProgress::WarmingUp,
+                            BackgroundStep::Waiting => TaskProgress::Waiting(msg.clone()),
                             BackgroundStep::Process { .. } => TaskProgress::Processing,
                             BackgroundStep::End { .. } => TaskProgress::Completing(msg.clone()),
                         };
@@ -1178,9 +1203,10 @@ where
                 }
 
                 match action {
-                    LoopAction::Continue | LoopAction::Jump(_) => {}
+                    LoopAction::Continue => {}
                     _ => {
                         match action {
+                            LoopAction::Break(_) => {}
                             LoopAction::Error(_)
                             | LoopAction::Complete(_)
                             | LoopAction::Failed(_) => state.stopped = true,
@@ -1203,7 +1229,7 @@ struct BackgroundState {
 
     phone: String,
     webhook: Webhook,
-    flags: (bool, bool),
+    flags: (bool, bool, bool, u64),
 
     client: Client,
     progress: TaskProgress,
@@ -1219,6 +1245,7 @@ struct BackgroundState {
 enum BackgroundStep {
     Start,
     Warmup,
+    Waiting,
     Process {
         cart: Basket,
     },
@@ -1238,8 +1265,8 @@ enum EndKind {
 
 enum LoopAction {
     Continue,
-    Jump(u8),
 
+    Break(Option<String>),
     Move(BackgroundStep, Option<String>),
 
     Error(String),

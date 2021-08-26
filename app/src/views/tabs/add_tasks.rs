@@ -11,7 +11,7 @@ use crate::{
     icons::{icon, Icon},
     layout::Message,
     logic::{
-        misc::{client, request, BanKind, RequestMethod, ResponseStatus},
+        misc::{client, request, RequestMethod, ResponseStatus},
         models::{ProductCard, ResponseResult, ResponseValue, SizeTag, Variant, Webhook},
     },
     themes::Theme,
@@ -168,10 +168,6 @@ impl AddTasksTab {
                                     match err {
                                         ResponseStatus::Timeout => "Timeout",
                                         ResponseStatus::ConnectionError => "Connection Error",
-                                        ResponseStatus::ProtectionBan(kind) => match kind {
-                                            BanKind::Variti => "Variti Ban",
-                                            BanKind::DDOSGuard => "Protection Ban",
-                                        },
                                     },
                                     None,
                                 )

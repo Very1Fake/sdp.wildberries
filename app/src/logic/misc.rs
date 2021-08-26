@@ -15,34 +15,21 @@ use crate::{
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
 #[derive(Debug)]
-pub enum BanKind {
-    Variti,
-    DDOSGuard,
-}
-
-#[derive(Debug)]
 pub enum ResponseStatus {
     Timeout,
     ConnectionError,
-    ProtectionBan(BanKind),
 }
 
 impl ResponseStatus {
     pub fn to_string(&self, tier: &str) -> String {
-        match &self {
-            ResponseStatus::Timeout => String::from("Timeout"),
-            ResponseStatus::ConnectionError => String::from("Connection Error"),
-            ResponseStatus::ProtectionBan(kind) => {
-                if !tier.is_empty() {
-                    match kind {
-                        BanKind::Variti => format!("Variti Ban ({})", tier),
-                        BanKind::DDOSGuard => format!("Protection Ban ({})", tier),
-                    }
-                } else {
-                    String::from("Protection Ban")
-                }
-            }
-        }
+        format!(
+            "{} ({})",
+            match &self {
+                ResponseStatus::Timeout => String::from("Timeout"),
+                ResponseStatus::ConnectionError => String::from("Connection Error"),
+            },
+            tier
+        )
     }
 }
 
@@ -61,39 +48,6 @@ pub struct Response {
     pub body: String,
 }
 
-impl Response {
-    pub fn ban_check(&self) -> Option<BanKind> {
-        match self.headers.get("Server").unwrap().to_str() {
-            // Variti protection
-            Ok(server) => {
-                if server.starts_with("Variti") {
-                    return Some(BanKind::Variti);
-                }
-            }
-            Err(_) => {}
-        }
-        match self.headers.get("Server").unwrap().to_str() {
-            // DDOS Guard protection
-            Ok(server) => {
-                if server == "ddos-guard" {
-                    if self.body.contains("<title>DDOS-GUARD</title>") {
-                        return Some(BanKind::DDOSGuard);
-                    }
-
-                    if let ResponseMethod::GET = self.method {
-                        if self.body.is_empty() {
-                            return Some(BanKind::DDOSGuard);
-                        }
-                    }
-                }
-            }
-            Err(_) => {}
-        }
-
-        None
-    }
-}
-
 pub enum RequestMethod<'a> {
     GET,
     POST(Option<&'a Vec<(String, String)>>),
@@ -109,104 +63,97 @@ pub async fn request<'a>(
     #[cfg(debug_assertions)]
     println!("WAITING FOR GET: {}", url);
     sleep(Duration::from_millis(delay)).await;
-    let mut resp_method;
+    let resp_method;
 
-    for _attempt in 0u8..=3 {
-        match match method {
-            RequestMethod::GET => {
-                resp_method = ResponseMethod::GET;
+    match match method {
+        RequestMethod::GET => {
+            resp_method = ResponseMethod::GET;
 
-                #[cfg(debug_assertions)]
-                println!("GET REQUEST ON: {}", url);
-                client
-                    .get(url)
-                    .header("Host", H_HOST)
-                    .header("User-Agent", H_USER_AGENT)
-                    .header("Accept", H_ACCEPT)
-                    .header("Accept-Language", H_ACCEPT_LANGUAGE)
-                    .header("Accept-Encoding", H_ACCEPT_ENCODING)
-                    .header("Referer", referer)
-                    .header("x-requested-with", H_X_REQUESTED_WITH)
-                    .header("x-spa-version", H_X_SPA_VERSION)
-                    .header("DNT", 1)
-                    .header("Sec-Fetch-Dest", H_SEC_FETCH_DEST)
-                    .header("Sec-Fetch-Mode", H_SEC_FETCH_MODE)
-                    .header("Sec-Fetch-Site", H_SEC_FETCH_SITE)
-                    .header("Pragma", H_PRAGMA)
-                    .header("Cache-Control", H_CACHE_CONTROL)
-                    .header("TE", H_TE)
-                    .send()
-                    .await
+            #[cfg(debug_assertions)]
+            println!("GET REQUEST ON: {}", url);
+            client
+                .get(url)
+                .header("Host", H_HOST)
+                .header("User-Agent", H_USER_AGENT)
+                .header("Accept", H_ACCEPT)
+                .header("Accept-Language", H_ACCEPT_LANGUAGE)
+                .header("Accept-Encoding", H_ACCEPT_ENCODING)
+                .header("Referer", referer)
+                .header("x-requested-with", H_X_REQUESTED_WITH)
+                .header("x-spa-version", H_X_SPA_VERSION)
+                .header("DNT", 1)
+                .header("Sec-Fetch-Dest", H_SEC_FETCH_DEST)
+                .header("Sec-Fetch-Mode", H_SEC_FETCH_MODE)
+                .header("Sec-Fetch-Site", H_SEC_FETCH_SITE)
+                .header("Pragma", H_PRAGMA)
+                .header("Cache-Control", H_CACHE_CONTROL)
+                .header("TE", H_TE)
+                .send()
+                .await
+        }
+        RequestMethod::POST(form) => {
+            resp_method = ResponseMethod::POST;
+
+            #[cfg(debug_assertions)]
+            println!("POST REQUEST ON: {}", url);
+            let mut client = client
+                .post(url)
+                .header("Host", H_HOST)
+                .header("User-Agent", H_USER_AGENT)
+                .header("Accept", H_ACCEPT)
+                .header("Accept-Language", H_ACCEPT_LANGUAGE)
+                .header("Accept-Encoding", H_ACCEPT_ENCODING)
+                .header("Referer", referer)
+                .header("x-requested-with", H_X_REQUESTED_WITH)
+                .header("x-spa-version", H_X_SPA_VERSION)
+                .header("Content-Type", "application/x-www-form-urlencoded")
+                .header("Origin", H_ORIGIN)
+                .header("DNT", 1)
+                .header("Sec-Fetch-Dest", H_SEC_FETCH_DEST)
+                .header("Sec-Fetch-Mode", H_SEC_FETCH_MODE)
+                .header("Sec-Fetch-Site", H_SEC_FETCH_SITE)
+                .header("Pragma", H_PRAGMA)
+                .header("Cache-Control", H_CACHE_CONTROL)
+                .header("TE", H_TE);
+
+            match form {
+                Some(data) => client = client.form(data),
+                None => client = client.header("Content-Length", "0"),
             }
-            RequestMethod::POST(form) => {
-                resp_method = ResponseMethod::POST;
 
-                #[cfg(debug_assertions)]
-                println!("POST REQUEST ON: {}", url);
-                let mut client = client
-                    .post(url)
-                    .header("Host", H_HOST)
-                    .header("User-Agent", H_USER_AGENT)
-                    .header("Accept", H_ACCEPT)
-                    .header("Accept-Language", H_ACCEPT_LANGUAGE)
-                    .header("Accept-Encoding", H_ACCEPT_ENCODING)
-                    .header("Referer", referer)
-                    .header("x-requested-with", H_X_REQUESTED_WITH)
-                    .header("x-spa-version", H_X_SPA_VERSION)
-                    .header("Content-Type", "application/x-www-form-urlencoded")
-                    .header("Origin", H_ORIGIN)
-                    .header("DNT", 1)
-                    .header("Sec-Fetch-Dest", H_SEC_FETCH_DEST)
-                    .header("Sec-Fetch-Mode", H_SEC_FETCH_MODE)
-                    .header("Sec-Fetch-Site", H_SEC_FETCH_SITE)
-                    .header("Pragma", H_PRAGMA)
-                    .header("Cache-Control", H_CACHE_CONTROL)
-                    .header("TE", H_TE);
+            client.send().await
+        }
+    } {
+        Ok(resp) => {
+            let mut result = Response {
+                method: resp_method,
+                version: resp.version(),
+                status: resp.status(),
+                headers: resp.headers().clone(),
+                body: String::new(),
+            };
 
-                match form {
-                    Some(data) => client = client.form(data),
-                    None => client = client.header("Content-Length", "0"),
-                }
-
-                client.send().await
-            }
-        } {
-            Ok(resp) => {
-                let mut result = Response {
-                    method: resp_method,
-                    version: resp.version(),
-                    status: resp.status(),
-                    headers: resp.headers().clone(),
-                    body: String::new(),
-                };
-
-                match resp.text().await {
-                    Ok(text) => result.body = text,
-                    Err(err) => {
-                        return if err.is_timeout() {
-                            Err(ResponseStatus::Timeout)
-                        } else {
-                            Err(ResponseStatus::ConnectionError)
-                        }
+            match resp.text().await {
+                Ok(text) => result.body = text,
+                Err(err) => {
+                    return if err.is_timeout() {
+                        Err(ResponseStatus::Timeout)
+                    } else {
+                        Err(ResponseStatus::ConnectionError)
                     }
                 }
-
-                match result.ban_check() {
-                    Some(_) => continue,
-                    None => return Ok(result),
-                }
             }
-            Err(err) => {
-                return if err.is_timeout() {
-                    Err(ResponseStatus::Timeout)
-                } else {
-                    Err(ResponseStatus::ConnectionError)
-                }
+
+            Ok(result)
+        }
+        Err(err) => {
+            return if err.is_timeout() {
+                Err(ResponseStatus::Timeout)
+            } else {
+                Err(ResponseStatus::ConnectionError)
             }
         }
     }
-
-    Err(ResponseStatus::ProtectionBan(BanKind::DDOSGuard))
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////

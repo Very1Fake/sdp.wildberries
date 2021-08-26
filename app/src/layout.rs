@@ -73,7 +73,8 @@ pub enum Message {
     Event(Event),
     Theme(Theme),
     ProxyMode(ProxyMode),
-    Experimental(u8, bool),
+    ExperimentalBool(u8, bool),
+    ExperimentalNumber(u8, u64),
     ResetAppearance,
 
     None,
@@ -359,7 +360,12 @@ impl Application for Layout {
                             size.clone(),
                             (a.phone.clone(), a.token.clone()),
                             self.settings.webhook.clone(),
-                            (self.settings.limiter, self.settings.force),
+                            (
+                                self.settings.limiter,
+                                self.settings.force,
+                                self.settings.monitor,
+                                self.settings.monitor_freq,
+                            ),
                         ),
                     ) {
                         Some(_) => panic!(),
@@ -438,9 +444,14 @@ impl Application for Layout {
             },
             Message::Theme(theme) => self.theme = theme,
             Message::ProxyMode(proxy_mode) => self.settings.proxy_mode = proxy_mode,
-            Message::Experimental(flag, set) => match flag {
+            Message::ExperimentalBool(flag, set) => match flag {
                 0 => self.settings.limiter = set,
                 1 => self.settings.force = set,
+                2 => self.settings.monitor = set,
+                _ => {}
+            },
+            Message::ExperimentalNumber(flag, num) => match flag {
+                3 => self.settings.monitor_freq = num,
                 _ => {}
             },
             Message::ResetAppearance => {
